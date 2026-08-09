@@ -21,7 +21,25 @@ struct RideIdleConfig {
   /// Upper bound on suppression. A controller that never stops advertising
   /// would otherwise keep the bridge offline forever. Zero disables the cap.
   uint32_t max_suppression_ms{60UL * 60UL * 1000UL};
+
+  /** Silence that proves the controller has left fast advertising.
+   *
+   * Ride Left does not stop advertising when released; it ramps its interval
+   * out over minutes on the way to sleep. Once a gap this long appears the
+   * controller is definitively no longer in fast mode, and it stays latched
+   * for the rest of the suppression. It only has to happen once, early, and
+   * the ramp produces it without any user action.
+   */
+  uint32_t slow_gap_ms{10UL * 1000UL};
+
+  /// Sightings within wake_burst_window_ms that together mean "advertising
+  /// fast again", which only a freshly woken or rebooted controller does.
+  uint8_t wake_burst_count{4};
+  uint32_t wake_burst_window_ms{2000};
 };
+
+/// Most sightings the burst detector ever needs to remember.
+static constexpr uint8_t kMaxWakeBurstCount = 8;
 
 enum class RideIdleAction : uint8_t {
   /// Nothing to do this iteration.
@@ -82,6 +100,10 @@ class RideIdlePolicy {
   /// True once the controller advertisement has been absent long enough that
   /// the next one will be treated as a wake.
   bool sleep_confirmed() const { return this->sleep_confirmed_; }
+
+  /// True once the controller has demonstrably left fast advertising, after
+  /// which a fast burst is accepted as a wake.
+  bool slowed() const { return this->slowed_; }
   uint32_t idle_disconnect_count() const { return this->idle_disconnect_count_; }
 
   /// Quiet time so far. Only meaningful while a session is ready.
@@ -107,14 +129,21 @@ class RideIdlePolicy {
 
  protected:
   void begin_suppression_(uint32_t now);
+  void record_burst_sighting_(uint32_t now);
+  bool burst_detected_(uint32_t now) const;
+  uint8_t burst_capacity_() const;
 
   RideIdleConfig config_{};
   uint32_t last_activity_ms_{0};
   uint32_t suppressed_since_ms_{0};
   uint32_t last_advertisement_ms_{0};
   uint32_t idle_disconnect_count_{0};
+  // Sighting times feeding the burst detector, oldest first.
+  uint32_t burst_times_[kMaxWakeBurstCount]{};
+  uint8_t burst_length_{0};
   bool suppressed_{false};
   bool sleep_confirmed_{false};
+  bool slowed_{false};
   bool has_advertisement_{false};
 };
 

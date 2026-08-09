@@ -23,29 +23,83 @@ void RideIdlePolicy::on_session_ready(uint32_t now) {
   this->last_activity_ms_ = now;
   this->suppressed_ = false;
   this->sleep_confirmed_ = false;
+  this->slowed_ = false;
+  this->burst_length_ = 0;
 }
 
 void RideIdlePolicy::on_activity(uint32_t now) { this->last_activity_ms_ = now; }
 
 bool RideIdlePolicy::on_advertisement(uint32_t now) {
-  const bool wakes = this->suppressed_ && this->sleep_confirmed_;
-  // Record the sighting either way. Outside suppression this only feeds the
-  // advertising diagnostics; inside it, an advertisement from a controller that
-  // has not yet slept restarts the absence window rather than reconnecting
-  // straight back into the session that was just dropped.
+  const uint32_t gap = this->has_advertisement_
+                           ? static_cast<uint32_t>(now - this->last_advertisement_ms_)
+                           : 0;
+  const bool had_advertisement = this->has_advertisement_;
   this->last_advertisement_ms_ = now;
   this->has_advertisement_ = true;
-  if (!wakes) {
+
+  if (!this->suppressed_) {
+    // Outside suppression this only feeds the advertising diagnostics.
+    this->burst_length_ = 0;
+    return false;
+  }
+
+  // A gap this long proves the controller has left fast advertising. It stays
+  // latched: the ramp toward sleep only widens from here.
+  if (had_advertisement && gap >= this->config_.slow_gap_ms) {
+    this->slowed_ = true;
+    this->burst_length_ = 0;
+  }
+
+  this->record_burst_sighting_(now);
+
+  // Re-arm only on a genuine return to fast advertising. Reconnecting on the
+  // first sparse advertisement is what previously dropped the bridge back into
+  // a controller that was merely ramping down, not asleep.
+  if (!this->slowed_ || !this->burst_detected_(now)) {
     return false;
   }
   this->suppressed_ = false;
   this->sleep_confirmed_ = false;
+  this->slowed_ = false;
+  this->burst_length_ = 0;
   return true;
+}
+
+void RideIdlePolicy::record_burst_sighting_(uint32_t now) {
+  const uint8_t capacity = this->burst_capacity_();
+  if (this->burst_length_ < capacity) {
+    this->burst_times_[this->burst_length_++] = now;
+    return;
+  }
+  for (uint8_t i = 1; i < capacity; i++) {
+    this->burst_times_[i - 1] = this->burst_times_[i];
+  }
+  this->burst_times_[capacity - 1] = now;
+}
+
+uint8_t RideIdlePolicy::burst_capacity_() const {
+  uint8_t count = this->config_.wake_burst_count;
+  if (count < 2)
+    count = 2;
+  if (count > kMaxWakeBurstCount)
+    count = kMaxWakeBurstCount;
+  return count;
+}
+
+bool RideIdlePolicy::burst_detected_(uint32_t now) const {
+  const uint8_t capacity = this->burst_capacity_();
+  if (this->burst_length_ < capacity) {
+    return false;
+  }
+  return static_cast<uint32_t>(now - this->burst_times_[0]) <=
+         this->config_.wake_burst_window_ms;
 }
 
 void RideIdlePolicy::request_reconnect(uint32_t now) {
   this->suppressed_ = false;
   this->sleep_confirmed_ = false;
+  this->slowed_ = false;
+  this->burst_length_ = 0;
   this->last_activity_ms_ = now;
 }
 
@@ -63,6 +117,8 @@ RideIdleAction RideIdlePolicy::poll(uint32_t now, bool session_ready) {
       // next iteration would otherwise machine-gun the link.
       this->suppressed_ = false;
       this->sleep_confirmed_ = false;
+      this->slowed_ = false;
+      this->burst_length_ = 0;
       this->last_activity_ms_ = now;
       return RideIdleAction::NONE;
     }
@@ -84,7 +140,19 @@ RideIdleAction RideIdlePolicy::poll(uint32_t now, bool session_ready) {
                       this->config_.max_suppression_ms)) {
     this->suppressed_ = false;
     this->sleep_confirmed_ = false;
+    this->slowed_ = false;
+    this->burst_length_ = 0;
     return RideIdleAction::REARM;
+  }
+
+  // Silence latches "slowed" too, covering a controller that stops outright
+  // rather than ramping down, and one that is already asleep when suppression
+  // begins. Both then reconnect on the wake burst.
+  if (!this->slowed_ &&
+      timeout_elapsed(now, this->last_advertisement_ms_,
+                      this->config_.slow_gap_ms)) {
+    this->slowed_ = true;
+    this->burst_length_ = 0;
   }
 
   if (!this->sleep_confirmed_ &&
@@ -98,6 +166,10 @@ RideIdleAction RideIdlePolicy::poll(uint32_t now, bool session_ready) {
 void RideIdlePolicy::begin_suppression_(uint32_t now) {
   this->suppressed_ = true;
   this->sleep_confirmed_ = false;
+  // The controller is still advertising fast at this instant, so the burst
+  // detector must not fire until a slow gap proves it has ramped down.
+  this->slowed_ = false;
+  this->burst_length_ = 0;
   this->suppressed_since_ms_ = now;
   // The controller was demonstrably present a moment ago, so treat the
   // disconnect itself as the most recent sighting. Without this the

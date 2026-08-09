@@ -655,11 +655,33 @@ void test_ride_left_manufacturer_discriminator() {
 
 bridge::RideIdlePolicy idle_policy(uint32_t idle_timeout_ms = 900000,
                                    uint32_t sleep_confirm_ms = 30000,
-                                   uint32_t max_suppression_ms = 3600000) {
+                                   uint32_t max_suppression_ms = 3600000,
+                                   uint32_t slow_gap_ms = 10000) {
   bridge::RideIdlePolicy policy;
-  policy.set_config(bridge::RideIdleConfig{idle_timeout_ms, sleep_confirm_ms,
-                                           max_suppression_ms});
+  bridge::RideIdleConfig config{};
+  config.idle_timeout_ms = idle_timeout_ms;
+  config.sleep_confirm_ms = sleep_confirm_ms;
+  config.max_suppression_ms = max_suppression_ms;
+  config.slow_gap_ms = slow_gap_ms;
+  policy.set_config(config);
   return policy;
+}
+
+// Feed `count` sightings spaced `interval_ms` apart starting at `start`,
+// returning the time of the last one. Reports whether any of them re-armed.
+uint32_t feed_advertisements(bridge::RideIdlePolicy *policy, uint32_t start,
+                             uint32_t interval_ms, uint32_t count,
+                             bool *rearmed = nullptr) {
+  uint32_t now = start;
+  for (uint32_t i = 0; i < count; i++) {
+    now = start + i * interval_ms;
+    const bool woke = policy->on_advertisement(now);
+    if (rearmed != nullptr && woke) {
+      *rearmed = true;
+    }
+    policy->poll(now, false);
+  }
+  return now;
 }
 
 void test_idle_timeout_boundary_and_activity_resets() {
@@ -713,14 +735,19 @@ void test_suppression_waits_for_a_real_sleep_wake_cycle() {
   EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(1130000, false));
   EXPECT_TRUE(policy.sleep_confirmed());
 
-  // Waking the controllers reconnects on that same advertisement.
-  EXPECT_TRUE(policy.on_advertisement(2000000));
+  // Waking the controllers reconnects, but only once they advertise fast
+  // again: a lone advertisement is what a controller ramping down emits.
+  EXPECT_FALSE(policy.on_advertisement(2000000));
+  EXPECT_TRUE(policy.suppressed());
+  bool rearmed = false;
+  feed_advertisements(&policy, 2000325, 325, 3, &rearmed);
+  EXPECT_TRUE(rearmed);
   EXPECT_FALSE(policy.suppressed());
   EXPECT_FALSE(policy.sleep_confirmed());
   EXPECT_EQ(1U, policy.idle_disconnect_count());
 
   // Advertisements outside suppression are ignored.
-  EXPECT_FALSE(policy.on_advertisement(2000001));
+  EXPECT_FALSE(policy.on_advertisement(2001000));
 }
 
 void test_suppression_cap_recovers_a_controller_that_never_sleeps() {
@@ -826,6 +853,98 @@ void test_reconnect_request_overrides_suppression() {
   EXPECT_EQ(2U, policy.idle_disconnect_count());
 }
 
+void test_advertising_backoff_never_reconnects() {
+  // The captured hardware behaviour: Ride Left holds ~325 ms after release,
+  // then ramps out through 2.2 s, 3.2 s, 4.8 s, 5.4 s and beyond on its way to
+  // sleep. Every one of those gaps must be treated as a controller that is
+  // still awake, which the earlier gap-threshold rule got wrong.
+  auto policy = idle_policy(300000, 30000, 0, 10000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  bool rearmed = false;
+  uint32_t now = 300000;
+
+  // Two minutes of fast advertising immediately after release.
+  now = feed_advertisements(&policy, now + 325, 325, 360, &rearmed);
+  EXPECT_FALSE(rearmed);
+  EXPECT_FALSE(policy.slowed());
+
+  // The observed ramp. None of these may reconnect.
+  for (uint32_t gap : {2227U, 3206U, 4770U, 5409U, 7000U, 9000U}) {
+    now += gap;
+    if (policy.on_advertisement(now)) {
+      rearmed = true;
+    }
+    policy.poll(now, false);
+  }
+  EXPECT_FALSE(rearmed);
+  EXPECT_TRUE(policy.suppressed());
+
+  // Once the ramp passes slow_gap_ms the controller is latched as slow, but a
+  // sparse advertisement still must not be mistaken for a wake.
+  now += 12000;
+  EXPECT_FALSE(policy.on_advertisement(now));
+  EXPECT_TRUE(policy.slowed());
+  now += 15000;
+  EXPECT_FALSE(policy.on_advertisement(now));
+  EXPECT_TRUE(policy.suppressed());
+}
+
+void test_fast_advertising_burst_is_a_wake() {
+  auto policy = idle_policy(300000, 30000, 0, 10000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  // Ramp down until the controller is latched as slow.
+  uint32_t now = 300000 + 20000;
+  EXPECT_FALSE(policy.on_advertisement(now));
+  EXPECT_TRUE(policy.slowed());
+
+  // A wake or reboot returns to fast advertising. The fourth sighting inside
+  // the burst window is the signal, and it arrives about a second after the
+  // controller comes back rather than after a long silence.
+  EXPECT_FALSE(policy.on_advertisement(now + 30000));
+  EXPECT_FALSE(policy.on_advertisement(now + 30325));
+  EXPECT_FALSE(policy.on_advertisement(now + 30650));
+  EXPECT_TRUE(policy.on_advertisement(now + 30975));
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_FALSE(policy.slowed());
+}
+
+void test_burst_before_the_controller_slows_is_ignored() {
+  // Right after our own disconnect the controller is still advertising fast,
+  // which is a burst by any measure. Re-arming there would reconnect straight
+  // back into the session that was just deliberately dropped.
+  auto policy = idle_policy(300000, 30000, 0, 10000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  bool rearmed = false;
+  feed_advertisements(&policy, 300325, 325, 200, &rearmed);
+  EXPECT_FALSE(rearmed);
+  EXPECT_TRUE(policy.suppressed());
+  EXPECT_FALSE(policy.slowed());
+}
+
+void test_controller_that_stops_outright_still_wakes() {
+  // A controller that goes silent rather than ramping down must also latch as
+  // slow, so the burst it emits on waking is accepted.
+  auto policy = idle_policy(300000, 30000, 0, 10000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(309999, false));
+  EXPECT_FALSE(policy.slowed());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(310000, false));
+  EXPECT_TRUE(policy.slowed());
+
+  bool rearmed = false;
+  feed_advertisements(&policy, 400000, 325, 4, &rearmed);
+  EXPECT_TRUE(rearmed);
+  EXPECT_FALSE(policy.suppressed());
+}
+
 void test_idle_timings_survive_the_millis_rollover() {
   auto policy = idle_policy(900000, 30000, 3600000);
   const uint32_t before_wrap = UINT32_MAX - 450000U;
@@ -837,13 +956,26 @@ void test_idle_timings_survive_the_millis_rollover() {
   EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(just_short, true));
   EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(at_timeout, true));
 
+  // The slow-gap latch and the sleep confirmation both straddle the wrap.
+  const uint32_t slow_short = static_cast<uint32_t>(at_timeout + 9999U);
+  const uint32_t slow_reached = static_cast<uint32_t>(at_timeout + 10000U);
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(slow_short, false));
+  EXPECT_FALSE(policy.slowed());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(slow_reached, false));
+  EXPECT_TRUE(policy.slowed());
+
   const uint32_t sleep_short = static_cast<uint32_t>(at_timeout + 29999U);
   const uint32_t slept = static_cast<uint32_t>(at_timeout + 30000U);
   EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(sleep_short, false));
   EXPECT_FALSE(policy.sleep_confirmed());
   EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(slept, false));
   EXPECT_TRUE(policy.sleep_confirmed());
-  EXPECT_TRUE(policy.on_advertisement(slept));
+
+  // The wake burst also spans the wrap boundary.
+  bool rearmed = false;
+  feed_advertisements(&policy, slept, 325, 4, &rearmed);
+  EXPECT_TRUE(rearmed);
+  EXPECT_FALSE(policy.suppressed());
 }
 
 using TestFunction = void (*)();
@@ -879,6 +1011,10 @@ int main() {
   run_test("reconnect and reset clear suppression", test_reconnect_and_reset_always_clear_suppression);
   run_test("advertising diagnostics track sightings", test_advertising_diagnostics_track_sightings_outside_suppression);
   run_test("reconnect request overrides suppression", test_reconnect_request_overrides_suppression);
+  run_test("advertising backoff never reconnects", test_advertising_backoff_never_reconnects);
+  run_test("fast advertising burst is a wake", test_fast_advertising_burst_is_a_wake);
+  run_test("burst before the controller slows is ignored", test_burst_before_the_controller_slows_is_ignored);
+  run_test("controller that stops outright still wakes", test_controller_that_stops_outright_still_wakes);
   run_test("idle timings survive the millis rollover", test_idle_timings_survive_the_millis_rollover);
 
   if (failures != 0) {

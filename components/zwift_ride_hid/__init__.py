@@ -26,10 +26,10 @@ from esphome.const import (
 DEPENDENCIES = ["esp32", "ble_client", "esp32_ble"]
 AUTO_LOAD = ["binary_sensor", "sensor", "text_sensor"]
 
+CONF_ADVERTISEMENT_AGE = "advertisement_age"
 CONF_ANALOG_LEVERS = "analog_levers"
 CONF_BUTTON_FEEDBACK = "button_feedback"
 CONF_CONNECT_CONFIRMATION = "connect_confirmation"
-CONF_ADVERTISEMENT_AGE = "advertisement_age"
 CONF_DEBUG_ADVERTISEMENTS = "debug_advertisements"
 CONF_DEBUG_CAPTURE = "debug_capture"
 CONF_DIAGNOSTICS = "diagnostics"
@@ -56,8 +56,11 @@ CONF_RIDE_CONNECTED = "ride_connected"
 CONF_RIGHT_LEVER = "right_lever"
 CONF_SETUP_TIMEOUT_COUNT = "setup_timeout_count"
 CONF_SLEEP_CONFIRMATION = "sleep_confirmation"
+CONF_SLOW_GAP = "slow_gap"
 CONF_STATE = "state"
 CONF_STATUS_LED = "status_led"
+CONF_WAKE_BURST_COUNT = "wake_burst_count"
+CONF_WAKE_BURST_WINDOW = "wake_burst_window"
 
 # Elapsed times use rollover-safe unsigned subtraction, which needs every
 # interval to stay well below 2^31 ms. A day is a generous practical ceiling.
@@ -123,6 +126,13 @@ IDLE_TIMEOUT_SCHEMA = cv.Schema(
         # A connected keyboard makes iPadOS hide its on-screen keyboard, so the
         # bonded host is released for the duration of a long idle period.
         cv.Optional(CONF_RELEASE_HID, default=True): cv.boolean,
+        # Ride Left ramps its advertising interval out over minutes on the way
+        # to sleep rather than stopping, so a gap alone cannot mean "asleep".
+        # A gap this long only proves it has left fast advertising; the wake
+        # itself is then recognised by a return to fast advertising.
+        cv.Optional(CONF_SLOW_GAP, default="10s"): _interval(1000),
+        cv.Optional(CONF_WAKE_BURST_COUNT, default=4): cv.int_range(min=2, max=8),
+        cv.Optional(CONF_WAKE_BURST_WINDOW, default="2s"): _interval(200),
     }
 )
 
@@ -316,6 +326,9 @@ async def to_code(config):
             idle[CONF_DISCONNECT_AFTER].total_milliseconds,
             idle[CONF_SLEEP_CONFIRMATION].total_milliseconds,
             idle[CONF_MAX_SUPPRESSION].total_milliseconds,
+            idle[CONF_SLOW_GAP].total_milliseconds,
+            idle[CONF_WAKE_BURST_COUNT],
+            idle[CONF_WAKE_BURST_WINDOW].total_milliseconds,
         )
     )
     cg.add(var.set_release_hid_when_idle(idle[CONF_RELEASE_HID]))
