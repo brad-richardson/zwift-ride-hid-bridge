@@ -171,9 +171,9 @@ zwift_ride_hid:
       name: Bridge Ready
     state:
       name: Bridge State
-    # False means the controllers have been quiet long enough that the next
-    # advertisement will reconnect. This is the reading that explains why a
-    # button press did or did not bring the session back.
+    # True while Ride Left is present: either connected, or seen advertising
+    # recently. False means it has gone quiet, which is the reading that
+    # explains why a button press did or did not bring the session back.
     ride_advertising:
       name: Ride Advertising
     advertisement_age:

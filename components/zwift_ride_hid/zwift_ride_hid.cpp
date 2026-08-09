@@ -150,7 +150,8 @@ void ZwiftRideHid::loop() {
   }
 
   const uint32_t diagnostics_now = millis();
-  const bool advertising_now = this->idle_policy_.advertising(diagnostics_now);
+  const bool advertising_now =
+      this->ride_ready_ || this->idle_policy_.advertising(diagnostics_now);
   if (advertising_now != this->advertising_published_) {
     this->advertising_published_ = advertising_now;
     this->diagnostics_dirty_ = true;
@@ -801,9 +802,13 @@ void ZwiftRideHid::publish_diagnostics_() {
   if (this->haptic_timeout_count_sensor_ != nullptr)
     this->haptic_timeout_count_sensor_->publish_state(
         this->ride_client_.haptic_timeout_count());
-  if (this->ride_advertising_sensor_ != nullptr)
-    this->ride_advertising_sensor_->publish_state(
-        this->idle_policy_.advertising(now));
+  if (this->ride_advertising_sensor_ != nullptr) {
+    // A live session is proof the controller is present, and the scanner is
+    // deliberately off while connected, so reporting the raw "seen recently"
+    // value there would read as a fault during a perfectly healthy session.
+    this->ride_advertising_sensor_->publish_state(this->ride_ready_ ||
+                                                  this->idle_policy_.advertising(now));
+  }
   if (this->advertisement_age_sensor_ != nullptr &&
       this->idle_policy_.has_advertisement())
     this->advertisement_age_sensor_->publish_state(

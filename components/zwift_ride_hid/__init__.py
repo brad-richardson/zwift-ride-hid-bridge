@@ -150,8 +150,8 @@ DIAGNOSTICS_SCHEMA = cv.Schema(
             device_class=DEVICE_CLASS_CONNECTIVITY,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         ),
-        # False means the controllers have been quiet for sleep_confirmation,
-        # so the next advertisement will reconnect.
+        # True while Ride Left is present: connected, or seen advertising
+        # recently. False means it has gone quiet.
         cv.Optional(CONF_RIDE_ADVERTISING): binary_sensor.binary_sensor_schema(
             device_class=DEVICE_CLASS_CONNECTIVITY,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
