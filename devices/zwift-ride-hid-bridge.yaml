@@ -35,7 +35,8 @@ wifi:
 captive_portal:
 
 logger:
-  level: INFO
+  # MEASUREMENT: DEBUG carries the advertisement capture below.
+  level: DEBUG
 
 api:
   encryption:
@@ -96,12 +97,12 @@ esp32_ble:
 
 esp32_ble_tracker:
   scan_parameters:
-    # Active receive duty is 30/320 = 9.375% while Ride is disconnected.
-    # The component pauses this global scanner as soon as the Ride client
-    # leaves IDLE, and restores continuous scanning after full disconnect.
+    # MEASUREMENT: 80/160 = 50% duty. At the production 9.375% only about half
+    # of advertisements are seen, which makes a periodic burst indistinguishable
+    # from a uniform slow rate. Restore 30ms/320ms afterwards.
     duration: 5min
-    interval: 320ms
-    window: 30ms
+    interval: 160ms
+    window: 80ms
     active: true
     continuous: true
 
@@ -133,12 +134,13 @@ zwift_ride_hid:
   # them use their own sleep behavior; reconnecting is fast enough that the
   # trade is worth it.
   idle_timeout:
-    disconnect_after: 15min
+    # MEASUREMENT: short cycle so the slow phase can be reached repeatedly.
+    disconnect_after: 5min
     # Only feeds the Ride Advertising diagnostic now. Reconnection is decided
     # by the wake burst below, not by a silence threshold.
-    sleep_confirmation: 30s
+    sleep_confirmation: 10min
     # Backstop only: the wake burst is the normal route back.
-    max_suppression: 60min
+    max_suppression: 0s
     # A connected keyboard makes iPadOS hide its on-screen keyboard, so the
     # bonded host is released for the duration of the idle period.
     release_hid: true
@@ -147,7 +149,9 @@ zwift_ride_hid:
     # silence at 2m54s. slow_gap sits between the two regimes so it latches
     # when the controller leaves fast advertising and cannot be reached by
     # missed packets before that.
-    slow_gap: 5s
+    # MEASUREMENT: an hour never latches, which disables the wake burst and
+    # leaves the slow phase to run uninterrupted for the full capture.
+    slow_gap: 60min
     # A wake or reboot returns to ~344 ms advertising, which the slow phase
     # cannot imitate: three spaced sightings need at least 12 s there.
     wake_burst_count: 3
@@ -195,7 +199,7 @@ zwift_ride_hid:
   # Logs every matching Ride advertisement with its manufacturer payload,
   # flags, and interval. Needed only to re-measure the advertising cadence,
   # and it puts the controller's address in the log stream, so leave it off.
-  debug_advertisements: false
+  debug_advertisements: true
 
 # Intentionally omitted for the dual-role BLE feasibility test:
 # web_server:
