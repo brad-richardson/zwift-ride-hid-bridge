@@ -22,16 +22,18 @@ credential, or key path belongs in this repository:
 
 ```console
 export ESPHOME_DASHBOARD_URL="ws://<device-builder-host>:6052/ws"
-export ESPHOME_DASHBOARD_CREDENTIALS="$HOME/.config/esphome-dashboard.credentials"
-export ESPHOME_DASHBOARD_CONFIG="zwift-hid-bridge.yaml"
-export ESPHOME_DEVICE_NAME="zwift-hid-bridge"
-export ESPHOME_FRIENDLY_NAME="Zwift HID Bridge"
-export ESPHOME_WIFI_SSID_SECRET="wifi_ssid"
-export ESPHOME_WIFI_PASSWORD_SECRET="wifi_password"
+export ESPHOME_DASHBOARD_CREDENTIALS="$HOME/.config/<dashboard-credentials-file>"
+export ESPHOME_DASHBOARD_CONFIG="<dashboard-configuration>.yaml"
+
+# Only needed where the deployed device differs from the reference YAML.
+export ESPHOME_DEVICE_NAME="<deployed-esphome-name>"
+export ESPHOME_FRIENDLY_NAME="<deployed-friendly-name>"
+export ESPHOME_WIFI_SSID_SECRET="<wifi-ssid-secret-name>"
+export ESPHOME_WIFI_PASSWORD_SECRET="<wifi-password-secret-name>"
 
 export ZWIFT_BRIDGE_HOST="<device-address>"
-export ZWIFT_BRIDGE_NAME="zwift-hid-bridge"
-export ZWIFT_BRIDGE_API_KEY_FILE="$HOME/.config/zwift-hid-bridge.api-key"
+export ZWIFT_BRIDGE_NAME="<deployed-esphome-name>"
+export ZWIFT_BRIDGE_API_KEY_FILE="$HOME/.config/<api-key-file>"
 ```
 
 The credentials file holds the dashboard username on the first line and the

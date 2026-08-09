@@ -13,7 +13,7 @@ The configuration reuses the secret names from the supplied ESPHome base configu
 - `fallback_password`
 - `api_key`
 
-The user's Device Builder also contains `wifi_ssid` and `wifi_password`, but the supplied working base uses `ssid` and `password`; the reference YAML follows that base. Rename the two `!secret` references if the intended network is stored under the `wifi_*` pair instead.
+A Device Builder instance may already store the network under a `wifi_ssid`/`wifi_password` pair instead. Rename the two `!secret` references, or let `tools/dashboard.py` substitute them at render time, if that is the case.
 
 Add one device-specific value:
 
