@@ -18,6 +18,7 @@
 #endif
 
 #include "hid_keyboard.h"
+#include "idle_policy.h"
 #include "input_state.h"
 #include "keymap.h"
 #include "ride_client.h"
@@ -77,6 +78,11 @@ class ZwiftRideHid : public Component,
   void set_button_haptic(bool enabled) { this->button_haptic_ = enabled; }
   void set_debug_capture(bool debug_capture) { this->debug_capture_ = debug_capture; }
   void set_status_led(GPIOPin *pin) { this->status_led_ = pin; }
+  void set_idle_timeout(uint32_t idle_timeout_ms, uint32_t sleep_confirm_ms,
+                        uint32_t max_suppression_ms) {
+    this->idle_policy_.set_config(
+        RideIdleConfig{idle_timeout_ms, sleep_confirm_ms, max_suppression_ms});
+  }
 
   void set_ride_connected_sensor(binary_sensor::BinarySensor *sensor) {
     this->ride_connected_sensor_ = sensor;
@@ -91,6 +97,15 @@ class ZwiftRideHid : public Component,
     this->invalid_frame_count_sensor_ = sensor;
   }
   void set_hid_report_count_sensor(sensor::Sensor *sensor) { this->hid_report_count_sensor_ = sensor; }
+  void set_idle_disconnect_count_sensor(sensor::Sensor *sensor) {
+    this->idle_disconnect_count_sensor_ = sensor;
+  }
+  void set_setup_timeout_count_sensor(sensor::Sensor *sensor) {
+    this->setup_timeout_count_sensor_ = sensor;
+  }
+  void set_haptic_timeout_count_sensor(sensor::Sensor *sensor) {
+    this->haptic_timeout_count_sensor_ = sensor;
+  }
   void set_left_lever_sensor(sensor::Sensor *sensor) { this->left_lever_sensor_ = sensor; }
   void set_right_lever_sensor(sensor::Sensor *sensor) { this->right_lever_sensor_ = sensor; }
 
@@ -98,6 +113,8 @@ class ZwiftRideHid : public Component,
   enum class BridgeState : uint8_t {
     STARTING,
     SCANNING,
+    CONNECTING,
+    RIDE_IDLE,
     RIDE_READY,
     HID_READY,
     READY,
@@ -110,19 +127,23 @@ class ZwiftRideHid : public Component,
   static const char *bridge_state_name_(BridgeState state);
   void queue_current_report_();
   void release_all_(const char *reason);
-  void publish_diagnostics_(bool force = false);
+  void publish_diagnostics_();
   void update_status_led_();
   void log_capture_(const uint8_t *data, size_t length, const RideInputPacket &packet) const;
   bool submit_pending_report_();
   void quiesce_(const char *reason, bool disconnect_ride);
   void update_scanner_policy_();
   bool scanner_wanted_();
+  void update_idle_policy_();
+  void ensure_ride_address_();
+  bool note_ride_advertisement_();
 
   esp32_ble::ESP32BLE *ble_parent_{nullptr};
   esp32_ble_tracker::ESP32BLETracker *ble_tracker_{nullptr};
   RideClient ride_client_{};
   HidKeyboard hid_keyboard_{};
   InputState input_state_{};
+  RideIdlePolicy idle_policy_{};
   const Keymap *keymap_{nullptr};
 
   std::string hid_name_{"Zwift Ride KB"};
@@ -147,10 +168,13 @@ class ZwiftRideHid : public Component,
   bool diagnostics_dirty_{true};
   bool auto_discover_ride_{false};
   bool ride_address_selected_{false};
+  bool ride_idle_suppressed_{false};
   uint64_t selected_ride_address_{0};
+  esp_ble_addr_type_t selected_ride_address_type_{BLE_ADDR_TYPE_PUBLIC};
   uint32_t reconnect_count_{0};
   uint32_t invalid_frame_count_{0};
   uint32_t hid_report_count_{0};
+  uint32_t published_ride_timeouts_{0};
   uint32_t last_haptic_ms_{0};
   uint32_t last_diagnostics_ms_{0};
   BridgeState published_state_{BridgeState::STARTING};
@@ -163,6 +187,9 @@ class ZwiftRideHid : public Component,
   sensor::Sensor *reconnect_count_sensor_{nullptr};
   sensor::Sensor *invalid_frame_count_sensor_{nullptr};
   sensor::Sensor *hid_report_count_sensor_{nullptr};
+  sensor::Sensor *idle_disconnect_count_sensor_{nullptr};
+  sensor::Sensor *setup_timeout_count_sensor_{nullptr};
+  sensor::Sensor *haptic_timeout_count_sensor_{nullptr};
   sensor::Sensor *left_lever_sensor_{nullptr};
   sensor::Sensor *right_lever_sensor_{nullptr};
 };

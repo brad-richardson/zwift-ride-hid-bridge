@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
@@ -54,6 +55,7 @@ void ZwiftRideHid::setup() {
   this->selected_ride_address_ = this->parent()->get_address();
   this->auto_discover_ride_ = this->selected_ride_address_ == 0;
   this->ride_address_selected_ = !this->auto_discover_ride_;
+  this->selected_ride_address_type_ = this->parent()->get_remote_addr_type();
   this->hid_keyboard_.set_parent(this->ble_parent_);
   if (!this->hid_keyboard_.begin(this->hid_name_)) {
     ESP_LOGE(TAG, "Could not schedule the HID keyboard service");
@@ -82,11 +84,26 @@ void ZwiftRideHid::setup() {
 float ZwiftRideHid::get_setup_priority() const { return setup_priority::AFTER_BLUETOOTH; }
 
 void ZwiftRideHid::loop() {
+  // This one override fills two identical virtual slots: Component::loop() and
+  // BLEClientNode::loop(). ESPHome's application loop calls the first, and
+  // BLEClient::loop() calls the second for every registered node, so the body
+  // would run twice per iteration whenever the Ride client is not idle.
+  // Upstream BLE client nodes dodge this by leaving loop() empty; this
+  // component needs a real one, so it only runs from its own component slot.
+  // App has no current component before the main loop starts, and skipping the
+  // setup-phase calls would only delay HID service construction by one
+  // iteration, so a null current component is treated as ours.
+  const Component *current_component = App.get_current_component();
+  if (current_component != nullptr && current_component != this)
+    return;
+
   if (this->is_failed()) {
     this->update_status_led_();
     return;
   }
 
+  this->ensure_ride_address_();
+  this->update_idle_policy_();
   this->update_scanner_policy_();
   this->ride_client_.loop();
   this->hid_keyboard_.loop();
@@ -121,6 +138,16 @@ void ZwiftRideHid::loop() {
     }
   }
 
+  // Watchdog trips are rare and raised inside RideClient, which has no
+  // diagnostics callback. Both counters only ever increase, so one comparison
+  // is enough to schedule a publish.
+  const uint32_t ride_timeouts = this->ride_client_.setup_timeout_count() +
+                                 this->ride_client_.haptic_timeout_count();
+  if (ride_timeouts != this->published_ride_timeouts_) {
+    this->published_ride_timeouts_ = ride_timeouts;
+    this->diagnostics_dirty_ = true;
+  }
+
   this->publish_diagnostics_();
   this->update_status_led_();
 }
@@ -139,6 +166,17 @@ void ZwiftRideHid::dump_config() {
                 this->auto_discover_ride_ ? "automatic" : "pinned address");
   ESP_LOGCONFIG(TAG,
                 "  Scanner policy: continuous only while Ride client is idle");
+  const auto &idle = this->idle_policy_.config();
+  if (idle.idle_timeout_ms == 0) {
+    ESP_LOGCONFIG(TAG, "  Idle disconnect: disabled");
+  } else {
+    ESP_LOGCONFIG(TAG,
+                  "  Idle disconnect: after %" PRIu32 " s without input\n"
+                  "  Sleep confirmation: %" PRIu32 " s without advertisements\n"
+                  "  Maximum suppression: %" PRIu32 " s",
+                  idle.idle_timeout_ms / 1000U, idle.sleep_confirm_ms / 1000U,
+                  idle.max_suppression_ms / 1000U);
+  }
   if (this->ride_address_selected_) {
     ESP_LOGCONFIG(TAG, "  Selected Ride Left: %s", this->parent()->address_str());
   }
@@ -148,8 +186,23 @@ void ZwiftRideHid::dump_config() {
 
 bool ZwiftRideHid::parse_device(
     const esp32_ble_tracker::ESPBTDevice &device) {
-  if (!this->auto_discover_ride_ || this->ride_address_selected_ ||
-      this->ota_active_ || this->stopped_ || this->parent() == nullptr ||
+  if (this->ota_active_ || this->stopped_ || this->parent() == nullptr)
+    return false;
+
+  const uint64_t advertised_address = device.address_uint64();
+  if (advertised_address == 0)
+    return false;
+
+  // Once an address is locked — by automatic selection or a pinned YAML MAC —
+  // the only remaining interest in advertisements is tracking whether the
+  // controller is awake, which drives the idle-suppression re-arm.
+  if (this->ride_address_selected_) {
+    if (advertised_address != this->selected_ride_address_)
+      return false;
+    return this->note_ride_advertisement_();
+  }
+
+  if (!this->auto_discover_ride_ ||
       this->parent()->state() != esp32_ble_tracker::ClientState::IDLE)
     return false;
 
@@ -179,17 +232,14 @@ bool ZwiftRideHid::parse_device(
   if (!is_ride_left)
     return false;
 
-  const uint64_t discovered_address = device.address_uint64();
-  if (discovered_address == 0)
-    return false;
-
   // Parsed-advertisement listeners run before clients in ESPHome 2026.7.4.
   // Selecting the address here lets the stock BLEClient consume this same
   // scan result, transition to DISCOVERED, and retain ownership of scan stop,
   // connection, GATT callbacks, and reconnect behavior.
-  this->selected_ride_address_ = discovered_address;
+  this->selected_ride_address_ = advertised_address;
+  this->selected_ride_address_type_ = device.get_address_type();
   this->parent()->set_address(this->selected_ride_address_);
-  this->parent()->set_remote_addr_type(device.get_address_type());
+  this->parent()->set_remote_addr_type(this->selected_ride_address_type_);
   this->ride_address_selected_ = true;
 
   char address[MAC_ADDRESS_PRETTY_BUFFER_SIZE];
@@ -205,6 +255,80 @@ bool ZwiftRideHid::parse_device(
              static_cast<unsigned>(kZwiftRideManufacturerPayloadLength));
   }
   return true;
+}
+
+bool ZwiftRideHid::note_ride_advertisement_() {
+  if (!this->idle_policy_.on_advertisement(millis()))
+    return false;
+
+  // The controller stopped advertising long enough to count as asleep and has
+  // now woken up. Re-enabling here, before the stock client sees this same scan
+  // result, lets it connect on this advertisement instead of the next one.
+  this->ride_idle_suppressed_ = false;
+  this->parent()->set_enabled(true);
+  this->diagnostics_dirty_ = true;
+  ESP_LOGI(TAG, "Ride Left woke and advertised again; reconnecting");
+  return true;
+}
+
+void ZwiftRideHid::ensure_ride_address_() {
+  if (!this->ride_address_selected_ || this->selected_ride_address_ == 0 ||
+      this->parent() == nullptr ||
+      this->parent()->get_address() == this->selected_ride_address_)
+    return;
+
+  // ESPHome clears the client address when it disconnects a client that is
+  // still in DISCOVERED. Because automatic selection only runs once per boot,
+  // losing the address would strand the bridge scanning until a reboot.
+  ESP_LOGW(TAG, "Restoring the selected Ride Left address on the BLE client");
+  this->parent()->set_address(this->selected_ride_address_);
+  this->parent()->set_remote_addr_type(this->selected_ride_address_type_);
+}
+
+void ZwiftRideHid::update_idle_policy_() {
+  if (this->parent() == nullptr || this->ota_active_ || this->stopped_)
+    return;
+
+  const uint32_t now = millis();
+  // A held control is continuous use even though it produces no transitions.
+  if (this->ride_ready_ && this->input_state_.active_actions() != 0)
+    this->idle_policy_.on_activity(now);
+
+  switch (this->idle_policy_.poll(now, this->ride_ready_)) {
+    case RideIdleAction::DISCONNECT:
+      this->ride_idle_suppressed_ = true;
+      // Disconnecting is asynchronous, so close the input path immediately:
+      // on_ride_disconnected() repeats this once the link actually goes away.
+      this->ride_session_quiesced_ = true;
+      this->ride_ready_ = false;
+      this->connect_haptic_pending_ = false;
+      this->button_haptic_pending_ = false;
+      this->release_all_("Ride idle timeout");
+      this->hid_keyboard_.set_advertising_allowed(false);
+      // set_enabled(false) disconnects and, unlike a bare disconnect(), also
+      // stops auto-connect from immediately reclaiming the still-awake
+      // controller. An established HID host stays connected.
+      this->parent()->set_enabled(false);
+      this->diagnostics_dirty_ = true;
+      ESP_LOGI(TAG,
+               "No Ride input for %" PRIu32
+               " s; disconnecting so the controllers can sleep",
+               this->idle_policy_.config().idle_timeout_ms / 1000U);
+      break;
+
+    case RideIdleAction::REARM:
+      this->ride_idle_suppressed_ = false;
+      this->parent()->set_enabled(true);
+      this->diagnostics_dirty_ = true;
+      ESP_LOGW(TAG,
+               "Ride Left never stopped advertising within the %" PRIu32
+               " s suppression window; reconnecting anyway",
+               this->idle_policy_.config().max_suppression_ms / 1000U);
+      break;
+
+    case RideIdleAction::NONE:
+      break;
+  }
 }
 
 void ZwiftRideHid::update_scanner_policy_() {
@@ -283,6 +407,8 @@ void ZwiftRideHid::ble_before_disabled_event_handler() {
   this->release_all_("BLE stack stopping");
   this->hid_keyboard_.ble_before_disabled_event_handler();
   this->ride_ready_ = false;
+  this->ride_idle_suppressed_ = false;
+  this->idle_policy_.reset(millis());
   this->diagnostics_dirty_ = true;
 }
 
@@ -290,6 +416,8 @@ void ZwiftRideHid::on_ride_ready() {
   if (this->ota_active_ || this->stopped_ || this->ride_session_quiesced_)
     return;
   this->ride_ready_ = true;
+  this->ride_idle_suppressed_ = false;
+  this->idle_policy_.on_session_ready(millis());
   this->node_state = esp32_ble_tracker::ClientState::ESTABLISHED;
   this->hid_keyboard_.set_advertising_allowed(true);
   if (this->ever_ride_ready_) {
@@ -312,9 +440,15 @@ void ZwiftRideHid::on_ride_disconnected() {
   this->release_all_("Ride disconnected");
   this->hid_keyboard_.set_advertising_allowed(false);
   this->diagnostics_dirty_ = true;
-  ESP_LOGW(TAG,
-           "Ride Left disconnected; all keyboard keys released and HID "
-           "advertising disabled");
+  if (this->ride_idle_suppressed_) {
+    ESP_LOGI(TAG,
+             "Ride Left released after the idle timeout; waiting for the "
+             "controllers to sleep before reconnecting");
+  } else {
+    ESP_LOGW(TAG,
+             "Ride Left disconnected; all keyboard keys released and HID "
+             "advertising disabled");
+  }
 }
 
 void ZwiftRideHid::on_ride_notification(const uint8_t *data, uint16_t length) {
@@ -342,6 +476,9 @@ void ZwiftRideHid::on_ride_notification(const uint8_t *data, uint16_t length) {
 
   const InputTransitions transitions = this->input_state_.apply(packet);
   if (transitions.changed()) {
+    // Only real press/release edges count as use. The controllers notify
+    // continuously, and lever noise below the press threshold is not a rider.
+    this->idle_policy_.on_activity(millis());
     this->queue_current_report_();
     if (this->button_haptic_ && transitions.pressed != 0) {
       this->button_haptic_pending_ = true;
@@ -410,6 +547,11 @@ void ZwiftRideHid::release_all_(const char *reason) {
 
 void ZwiftRideHid::quiesce_(const char *reason, bool disconnect_ride) {
   this->ride_session_quiesced_ = true;
+  // OTA and shutdown take over the Ride link. Dropping suppression here means
+  // an aborted update can never resume into a bridge that is still refusing to
+  // reconnect; update_idle_policy_() re-arms the timer on the next handshake.
+  this->ride_idle_suppressed_ = false;
+  this->idle_policy_.reset(millis());
   // OTA and shutdown set their flags before entering here. Submit the scanner
   // stop synchronously; on_scanner_state() catches an in-flight STARTING race.
   this->update_scanner_policy_();
@@ -454,6 +596,10 @@ void ZwiftRideHid::on_ota_global_state(ota::OTAState state, float progress, uint
   } else if (state == ota::OTA_ERROR || state == ota::OTA_ABORT) {
     this->ota_active_ = false;
     this->hid_keyboard_.resume();
+    // An idle disconnect may have disabled the client before the update began.
+    // quiesce_() already cleared suppression, so restore the client itself.
+    if (this->parent() != nullptr)
+      this->parent()->set_enabled(true);
     this->diagnostics_dirty_ = true;
     ESP_LOGW(TAG,
              "OTA stopped before completion; Ride scanning will resume after "
@@ -475,6 +621,10 @@ ZwiftRideHid::BridgeState ZwiftRideHid::bridge_state_() const {
     return BridgeState::READY;
   if (this->ride_ready_)
     return BridgeState::RIDE_READY;
+  if (this->ride_idle_suppressed_)
+    return BridgeState::RIDE_IDLE;
+  if (this->ride_client_.state() != RideClientState::DISCONNECTED)
+    return BridgeState::CONNECTING;
   if (this->hid_ready_last_)
     return BridgeState::HID_READY;
   if (this->hid_keyboard_.service_ready())
@@ -488,6 +638,10 @@ const char *ZwiftRideHid::bridge_state_name_(BridgeState state) {
       return "starting";
     case BridgeState::SCANNING:
       return "scanning";
+    case BridgeState::CONNECTING:
+      return "connecting";
+    case BridgeState::RIDE_IDLE:
+      return "ride_idle_sleeping";
     case BridgeState::RIDE_READY:
       return "ride_ready_waiting_for_hid";
     case BridgeState::HID_READY:
@@ -505,12 +659,12 @@ const char *ZwiftRideHid::bridge_state_name_(BridgeState state) {
   }
 }
 
-void ZwiftRideHid::publish_diagnostics_(bool force) {
+void ZwiftRideHid::publish_diagnostics_() {
   const uint32_t now = millis();
   const BridgeState state = this->bridge_state_();
-  if (!force && !this->diagnostics_dirty_ && state == this->published_state_)
+  if (!this->diagnostics_dirty_ && state == this->published_state_)
     return;
-  if (!force && now - this->last_diagnostics_ms_ < DIAGNOSTIC_MAX_RATE_MS)
+  if (now - this->last_diagnostics_ms_ < DIAGNOSTIC_MAX_RATE_MS)
     return;
 
   if (this->ride_connected_sensor_ != nullptr)
@@ -527,6 +681,15 @@ void ZwiftRideHid::publish_diagnostics_(bool force) {
     this->invalid_frame_count_sensor_->publish_state(this->invalid_frame_count_);
   if (this->hid_report_count_sensor_ != nullptr)
     this->hid_report_count_sensor_->publish_state(this->hid_report_count_);
+  if (this->idle_disconnect_count_sensor_ != nullptr)
+    this->idle_disconnect_count_sensor_->publish_state(
+        this->idle_policy_.idle_disconnect_count());
+  if (this->setup_timeout_count_sensor_ != nullptr)
+    this->setup_timeout_count_sensor_->publish_state(
+        this->ride_client_.setup_timeout_count());
+  if (this->haptic_timeout_count_sensor_ != nullptr)
+    this->haptic_timeout_count_sensor_->publish_state(
+        this->ride_client_.haptic_timeout_count());
   if (this->expose_raw_) {
     if (this->left_lever_sensor_ != nullptr && this->input_state_.has_analog(0))
       this->left_lever_sensor_->publish_state(this->input_state_.analog(0));
@@ -564,6 +727,13 @@ void ZwiftRideHid::update_status_led_() {
     }
     case BridgeState::STOPPED:
       on = false;
+      break;
+    case BridgeState::CONNECTING:
+      on = now % 500U < 100U;
+      break;
+    case BridgeState::RIDE_IDLE:
+      // A rare, brief flash: deliberately asleep rather than searching.
+      on = now % 5000U < 100U;
       break;
     case BridgeState::STARTING:
     case BridgeState::SCANNING:

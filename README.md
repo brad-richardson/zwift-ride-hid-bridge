@@ -11,6 +11,7 @@ The project is downstream of [Fuenfachsen/Zword_ZwiftRide-to-BLE-Keyboard](https
 - ESPHome owns Wi-Fi, encrypted Home Assistant API access, native OTA, safe mode, scanning, and the single Bluedroid lifecycle.
 - The component auto-discovers **Ride Left** using Zwift's FC82 service, company ID, and Ride-left device ID, then hands the selected address to ESPHome's stock BLE client. Ride Left tunnels Ride Right input, so the bridge does not consume a third controller connection.
 - The HID keyboard is not advertised until Ride Left completes its handshake and input subscription. Ride loss releases every key and suppresses new HID connections; an already-connected, bonded iPad can remain attached and resume without another pairing cycle.
+- After 15 minutes without input the bridge releases the Ride link so the controllers can sleep instead of being held awake by the connection. It then waits for their advertisement to disappear and return — a real sleep and wake — before reconnecting, with a one-hour cap so a controller that never sleeps cannot strand the bridge. All three intervals are configurable, and `disconnect_after: 0s` disables the feature.
 - The component discovers the FC82 characteristics, subscribes to notifications, writes `RideOn`, and can send the controller's haptic command.
 - A bounded protobuf decoder accepts both observed analog-record layouts, decodes all 16 known button bits and four signed analog channels, and rejects malformed frames transactionally.
 - Threshold plus hysteresis turns both polarities of both active levers into four independent logical inputs.
@@ -52,6 +53,7 @@ See [the complete mapping table](docs/delta-mapping.md) for every button—inclu
 - Pair the advertised `Zwift Ride KB` once from the iPad. Bond data is stored in ESP32 NVS, so normal application OTA updates should not require re-pairing. Erasing flash/NVS will.
 - Short taps of the two orange logo/power controls emit Select and Start. A long hold is still the controller power gesture and may disconnect it.
 - Controller loss sends an empty report while the HID link is available; either link loss clears the bridge's internal key state so a later session cannot inherit held keys. ESPHome then retries Ride, but HID advertising returns only after a fresh controller handshake. These paths are implemented but remain hardware-untested.
+- A quiet session ends deliberately: after `idle_timeout.disconnect_after`, the bridge releases the Ride link, keeps the bonded iPad attached, and stops advertising the keyboard. It refuses to reconnect until the controllers have stopped advertising for `sleep_confirmation` and then advertise again, so a button press is what brings them back rather than an immediate reconnect into the still-awake controllers. A held control counts as use and never triggers the timeout; lever movement below the press threshold does not.
 - At OTA start the bridge releases keys, pauses Ride/HID report processing, disconnects both peers, and stops HID advertising before the update proceeds. An aborted/failed OTA resumes controller scanning without accepting queued input or advertising HID until a fresh Ride handshake; a successful OTA reboots into the new image.
 
 After the first USB flash, normal updates are one pinned-SHA change and an ESPHome OTA install. Keep the last hardware-tested SHA handy: rollback means restoring that SHA in Device Builder, compiling, and installing it over the network. OTA cannot repair every bootloader, partition, or flash failure, so USB remains the recovery path.
@@ -69,6 +71,15 @@ ctest --test-dir build/host --output-on-failure
 ```
 
 More detail is in the [implementation/validation plan](PLAN.md), [protocol inventory](docs/protocol.md), [hardware checklist](docs/hardware-test-checklist.md), and [architecture decision](docs/decisions/0001-esphome-external-component.md).
+
+## Deploying and watching a live bridge
+
+[`tools/`](tools/README.md) holds the release and observation scripts for a
+Device Builder instance: rendering the pinned deployment configuration from the
+reviewed reference YAML, driving compile/install, streaming filtered device
+logs, and watching diagnostic transitions over the encrypted API. Every
+site-specific value comes from the environment, so no address or credential
+lives in this repository. CI does not use these scripts.
 
 ## License and provenance
 

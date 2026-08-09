@@ -1099,8 +1099,6 @@ void HidKeyboard::quiesce() {
   this->stop_advertising_();
 }
 
-void HidKeyboard::stop() { this->quiesce(); }
-
 void HidKeyboard::resume() {
   this->quiesced_ = false;
   this->pending_report_ = true;
@@ -1192,9 +1190,9 @@ void HidKeyboard::reset_server_state_() {
   this->advertising_active_ = false;
   this->advertising_start_requested_ = false;
   this->advertising_stop_requested_ = false;
-  // ESPHome's BLEAdvertising object survives a disable/enable cycle and keeps
-  // its UUID vector. Preserve this flag so the HID UUID is not appended again
-  // on every runtime BLE restart.
+  // advertising_uuid_added_ is deliberately not reset here: ESPHome's
+  // BLEAdvertising object survives a disable/enable cycle and keeps its UUID
+  // vector, so re-adding would append the HID UUID again on every restart.
   this->failed_ = false;
   this->next_register_attempt_ms_ = millis() + 250;
 }

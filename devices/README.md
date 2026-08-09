@@ -33,6 +33,8 @@ The reference `ble_client` uses `00:00:00:00:00:00` as an explicit auto-discover
 
 The YAML keeps ESPHome's tracker in continuous mode as the disconnected baseline. At runtime the component uses the tracker's public API to stop the global scanner whenever the Ride client leaves `IDLE`, including connection setup and an established session, and restores continuous scanning only after complete disconnect. Do not add a Bluetooth proxy, another BLE client, or advertisement-driven sensors without revisiting this policy because the ESP32 has one shared scanner.
 
+Scanning also stays on throughout an idle suppression window, which is how the component notices that the controllers stopped advertising and later woke. The ESP32 is USB-powered, so the cost is radio time rather than battery.
+
 ## Local repository build
 
 Keep the checked-in source block when the YAML and component are in the same clone:
@@ -55,7 +57,9 @@ uv run --locked esphome compile devices/zwift-ride-hid-bridge.yaml
 
 ## Immutable Device Builder deployment
 
-When the YAML lives on the home server, replace only `external_components` with:
+[`tools/dashboard.py`](../tools/README.md) automates the substitutions below by rendering the deployed configuration from this reference YAML, so the two cannot drift. Do the equivalent by hand only if the tooling is unavailable.
+
+The deployed instance differs from this reference in exactly four ways: the `name`/`friendly_name` substitutions, the two Wi-Fi secret names if the network is stored under the `wifi_*` pair, and the source block. Replace only `external_components` with:
 
 ```yaml
 external_components:
@@ -93,6 +97,10 @@ zwift_ride_hid:
   haptics:
     connect_confirmation: true
     button_feedback: false
+  idle_timeout:
+    disconnect_after: 15min
+    sleep_confirmation: 30s
+    max_suppression: 60min
   status_led:
     number: GPIO21
     inverted: true
@@ -111,6 +119,12 @@ zwift_ride_hid:
       name: Invalid Ride Frame Count
     hid_report_count:
       name: HID Report Count
+    idle_disconnect_count:
+      name: Ride Idle Disconnect Count
+    setup_timeout_count:
+      name: Ride Setup Timeout Count
+    haptic_timeout_count:
+      name: Ride Haptic Timeout Count
     left_lever:
       name: Left Lever Raw
       disabled_by_default: true
@@ -123,6 +137,18 @@ zwift_ride_hid:
 The press threshold must be greater than the release threshold. Raw lever entities are disabled by default in Home Assistant but enabled at the component while the physical signs are being established. After calibration, set `expose_raw: false` and remove the two raw sensors if they are not useful.
 
 `connect_confirmation` requests one haptic pulse after the Ride handshake. `button_feedback` requests vibration for input transitions and is deliberately off to avoid distracting feedback and unnecessary GATT traffic. Haptics should be disabled first when diagnosing controller compatibility.
+
+## Idle disconnect
+
+Holding the Ride GATT link keeps the controllers awake, so an unattended bridge would flatten their batteries. `idle_timeout` releases the link instead:
+
+- `disconnect_after` (default `15min`) is the quiet period. Any press, release, or lever threshold crossing restarts it, and a control that is simply held counts as continuous use. `0s` disables the feature and restores the original always-connected behavior.
+- `sleep_confirmation` (default `30s`) is how long the controller advertisement must be absent before a later advertisement is treated as a genuine wake. A controller that was just released keeps advertising for a while; reconnecting to that would defeat the point. The practical consequence is that returning before the controllers sleep means waiting for them to sleep, or power-cycling one of them.
+- `max_suppression` (default `60min`) is the safety net. If the controllers never stop advertising, the bridge reconnects anyway rather than staying offline until a reboot. `0s` removes the cap and should only be used once the controllers' sleep behavior is well understood.
+
+`max_suppression` must be longer than `sleep_confirmation`; ESPHome rejects the configuration otherwise. Suppression is always abandoned by an OTA, a shutdown, or a BLE stack restart, so an aborted update can never leave the bridge refusing to reconnect.
+
+While suppressed, the bonded iPad stays connected and every key is released, but `Zwift Ride KB` is not advertised, exactly as for any other Ride loss. `Bridge State` reads `ride_idle_sleeping`, and `Ride Idle Disconnect Count` separates deliberate releases from `Ride Reconnect Count`.
 
 The active-low LED is assigned inside `zwift_ride_hid`; do not also configure ESPHome's generic `status_led` on GPIO21. Expected patterns are documented in the [hardware checklist](../docs/hardware-test-checklist.md).
 

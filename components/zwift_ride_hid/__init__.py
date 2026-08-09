@@ -29,13 +29,18 @@ CONF_BUTTON_FEEDBACK = "button_feedback"
 CONF_CONNECT_CONFIRMATION = "connect_confirmation"
 CONF_DEBUG_CAPTURE = "debug_capture"
 CONF_DIAGNOSTICS = "diagnostics"
+CONF_DISCONNECT_AFTER = "disconnect_after"
 CONF_EXPOSE_RAW = "expose_raw"
+CONF_HAPTIC_TIMEOUT_COUNT = "haptic_timeout_count"
 CONF_HAPTICS = "haptics"
 CONF_HID_CONNECTED = "hid_connected"
 CONF_HID_NAME = "hid_name"
 CONF_HID_REPORT_COUNT = "hid_report_count"
+CONF_IDLE_DISCONNECT_COUNT = "idle_disconnect_count"
+CONF_IDLE_TIMEOUT = "idle_timeout"
 CONF_INVALID_FRAME_COUNT = "invalid_frame_count"
 CONF_LEFT_LEVER = "left_lever"
+CONF_MAX_SUPPRESSION = "max_suppression"
 CONF_PRESS_THRESHOLD = "press_threshold"
 CONF_PROFILE = "profile"
 CONF_READY = "ready"
@@ -43,8 +48,14 @@ CONF_RECONNECT_COUNT = "reconnect_count"
 CONF_RELEASE_THRESHOLD = "release_threshold"
 CONF_RIDE_CONNECTED = "ride_connected"
 CONF_RIGHT_LEVER = "right_lever"
+CONF_SETUP_TIMEOUT_COUNT = "setup_timeout_count"
+CONF_SLEEP_CONFIRMATION = "sleep_confirmation"
 CONF_STATE = "state"
 CONF_STATUS_LED = "status_led"
+
+# Elapsed times use rollover-safe unsigned subtraction, which needs every
+# interval to stay well below 2^31 ms. A day is a generous practical ceiling.
+MAX_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 PROFILES = ("delta_emulator", "diagnostic_all_inputs")
 
@@ -65,6 +76,43 @@ HAPTICS_SCHEMA = cv.Schema(
     {
         cv.Optional(CONF_CONNECT_CONFIRMATION, default=True): cv.boolean,
         cv.Optional(CONF_BUTTON_FEEDBACK, default=False): cv.boolean,
+    }
+)
+
+
+def _interval(minimum_ms, zero_disables=False):
+    """A millisecond time period bounded so elapsed times stay rollover-safe."""
+
+    def validate(value):
+        period = cv.positive_time_period_milliseconds(value)
+        milliseconds = period.total_milliseconds
+        if zero_disables and milliseconds == 0:
+            return period
+        if milliseconds < minimum_ms:
+            raise cv.Invalid(
+                f"must be at least {minimum_ms} ms"
+                + (" or 0 to disable" if zero_disables else "")
+            )
+        if milliseconds > MAX_INTERVAL_MS:
+            raise cv.Invalid(f"must not exceed {MAX_INTERVAL_MS} ms")
+        return period
+
+    return validate
+
+
+IDLE_TIMEOUT_SCHEMA = cv.Schema(
+    {
+        # Zero holds the Ride link open indefinitely, which is the original
+        # behavior and flattens the controllers when the bridge is unattended.
+        cv.Optional(CONF_DISCONNECT_AFTER, default="15min"): _interval(
+            60 * 1000, zero_disables=True
+        ),
+        cv.Optional(CONF_SLEEP_CONFIRMATION, default="30s"): _interval(5 * 1000),
+        # Zero removes the safety net: a controller that never stops
+        # advertising would then keep the bridge offline until a reboot.
+        cv.Optional(CONF_MAX_SUPPRESSION, default="60min"): _interval(
+            60 * 1000, zero_disables=True
+        ),
     }
 )
 
@@ -103,6 +151,24 @@ DIAGNOSTICS_SCHEMA = cv.Schema(
             state_class=STATE_CLASS_MEASUREMENT,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         ),
+        cv.Optional(CONF_IDLE_DISCONNECT_COUNT): sensor.sensor_schema(
+            icon=ICON_COUNTER,
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_SETUP_TIMEOUT_COUNT): sensor.sensor_schema(
+            icon=ICON_COUNTER,
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_HAPTIC_TIMEOUT_COUNT): sensor.sensor_schema(
+            icon=ICON_COUNTER,
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
         cv.Optional(CONF_LEFT_LEVER): sensor.sensor_schema(
             accuracy_decimals=0,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
@@ -119,6 +185,19 @@ def _validate_thresholds(config):
     analog = config[CONF_ANALOG_LEVERS]
     if analog[CONF_RELEASE_THRESHOLD] >= analog[CONF_PRESS_THRESHOLD]:
         raise cv.Invalid("release_threshold must be lower than press_threshold")
+    return config
+
+
+def _validate_idle_timeout(config):
+    idle = config[CONF_IDLE_TIMEOUT]
+    suppression_ms = idle[CONF_MAX_SUPPRESSION].total_milliseconds
+    if suppression_ms == 0:
+        return config
+    if suppression_ms <= idle[CONF_SLEEP_CONFIRMATION].total_milliseconds:
+        raise cv.Invalid(
+            "max_suppression must be longer than sleep_confirmation, otherwise "
+            "the bridge reconnects before it can tell that the controllers slept"
+        )
     return config
 
 
@@ -141,6 +220,7 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_ANALOG_LEVERS, default={}): ANALOG_LEVER_SCHEMA,
             cv.Optional(CONF_HAPTICS, default={}): HAPTICS_SCHEMA,
+            cv.Optional(CONF_IDLE_TIMEOUT, default={}): IDLE_TIMEOUT_SCHEMA,
             cv.Optional(CONF_STATUS_LED): pins.gpio_output_pin_schema,
             cv.Optional(CONF_DIAGNOSTICS, default={}): DIAGNOSTICS_SCHEMA,
             cv.Optional(CONF_DEBUG_CAPTURE, default=False): cv.boolean,
@@ -150,6 +230,7 @@ CONFIG_SCHEMA = cv.All(
     .extend(ble_client.BLE_CLIENT_SCHEMA)
     .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA),
     _validate_thresholds,
+    _validate_idle_timeout,
     cv.only_with_framework("esp-idf"),
 )
 
@@ -191,6 +272,15 @@ async def to_code(config):
     cg.add(var.set_button_haptic(haptics[CONF_BUTTON_FEEDBACK]))
     cg.add(var.set_debug_capture(config[CONF_DEBUG_CAPTURE]))
 
+    idle = config[CONF_IDLE_TIMEOUT]
+    cg.add(
+        var.set_idle_timeout(
+            idle[CONF_DISCONNECT_AFTER].total_milliseconds,
+            idle[CONF_SLEEP_CONFIRMATION].total_milliseconds,
+            idle[CONF_MAX_SUPPRESSION].total_milliseconds,
+        )
+    )
+
     if CONF_STATUS_LED in config:
         pin = await cg.gpio_pin_expression(config[CONF_STATUS_LED])
         cg.add(var.set_status_led(pin))
@@ -204,6 +294,15 @@ async def to_code(config):
         CONF_RECONNECT_COUNT: (sensor.new_sensor, "set_reconnect_count_sensor"),
         CONF_INVALID_FRAME_COUNT: (sensor.new_sensor, "set_invalid_frame_count_sensor"),
         CONF_HID_REPORT_COUNT: (sensor.new_sensor, "set_hid_report_count_sensor"),
+        CONF_IDLE_DISCONNECT_COUNT: (
+            sensor.new_sensor,
+            "set_idle_disconnect_count_sensor",
+        ),
+        CONF_SETUP_TIMEOUT_COUNT: (sensor.new_sensor, "set_setup_timeout_count_sensor"),
+        CONF_HAPTIC_TIMEOUT_COUNT: (
+            sensor.new_sensor,
+            "set_haptic_timeout_count_sensor",
+        ),
         CONF_LEFT_LEVER: (sensor.new_sensor, "set_left_lever_sensor"),
         CONF_RIGHT_LEVER: (sensor.new_sensor, "set_right_lever_sensor"),
     }

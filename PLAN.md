@@ -20,6 +20,7 @@ Use ESPHome's `esp32_ble_tracker` and `ble_client` for Ride Left. Register the H
 - First flash by USB; every normal update after that through native ESPHome OTA.
 - Production YAML loads only `zwift_ride_hid` from this Git repository at an immutable 40-character commit SHA.
 - Auto-discover or configure the Ride left controller, then reconnect after sleep/drop.
+- Release the Ride link after a configurable idle period so the controllers can sleep instead of being held awake, and reconnect on a genuine sleep/wake cycle rather than immediately.
 - `RideOn` handshake, notification subscription, and haptic command.
 - Decode the protobuf wire format, not fixed byte offsets.
 - Support all 16 known discrete inputs.
@@ -56,13 +57,15 @@ zwift-ride-hid-bridge/
 │       ├── ride_protocol.h/.cpp   # bounded protobuf/varint parser
 │       ├── input_state.h/.cpp     # semantic buttons and lever hysteresis
 │       ├── keymap.h/.cpp          # canned mappings and whole HID reports
+│       ├── idle_policy.h/.cpp     # idle disconnect and sleep/wake re-arm
 │       └── hid_keyboard.h/.cpp    # broker-aware Bluedroid HID service/reports
 ├── devices/
 │   ├── zwift-ride-hid-bridge.yaml # reference device config
 │   └── secrets.example.yaml
 ├── tests/
 │   ├── CMakeLists.txt
-│   └── host_core_tests.cpp        # protocol/state/mapping host coverage
+│   └── host_core_tests.cpp        # protocol/state/mapping/idle host coverage
+├── tools/                         # Device Builder release and observation
 └── docs/
     ├── protocol.md
     ├── delta-mapping.md
@@ -141,6 +144,10 @@ zwift_ride_hid:
   haptics:
     connect_confirmation: true
     button_feedback: false
+  idle_timeout:
+    disconnect_after: 15min
+    sleep_confirmation: 30s
+    max_suppression: 60min
   status_led:
     number: GPIO21
     inverted: true
@@ -260,10 +267,16 @@ The implementation exposes an explicit lifecycle equivalent to:
 ```text
 SCANNING → CONNECTING → DISCOVERING → HANDSHAKING → READY
     ↑                                                │
-    └──────── backoff + rescan ← DISCONNECTED ──────┘
+    ├──────── backoff + rescan ← DISCONNECTED ───────┤
+    │                                                │
+    └── wake advertisement ← RIDE_IDLE ← idle timeout ┘
 ```
 
 On any transition out of `READY`, send an empty HID report before cleanup. Re-scan continuously with bounded backoff and filter for Ride left rather than relying on power-on order.
+
+`RIDE_IDLE` is the deliberate branch. Holding the GATT link keeps the controllers awake, so a quiet session is ended on purpose: the bridge releases the link, keeps the bonded HID host, and disables ESPHome's client so `auto_connect` cannot immediately reclaim the still-awake controllers. It re-enables the client only after the controller advertisement has been absent long enough to prove sleep and has then reappeared, with a suppression cap so a controller that never sleeps still recovers without a reboot.
+
+Two watchdogs guard the states above. `RideClient` bounds every asynchronous GATT step, and it additionally treats ESPHome's client returning to `IDLE` without a `CLOSE`/`DISCONNECT` event as a lost session, because ESPHome's own ten-second disconnect timeout reaches `IDLE` through a path that dispatches no node event. Without that check a dropped teardown event would leave the bridge reporting `READY` with keys held.
 
 OTA lifecycle:
 
@@ -275,6 +288,8 @@ OTA lifecycle:
 Acceptance:
 
 - controller sleep/wake recovers without ESP32 reboot;
+- a quiet session releases the Ride link on schedule, does not reconnect while the controllers are still advertising, and returns on a genuine wake;
+- a held control never triggers the idle timeout;
 - iPad Bluetooth off/on recovers without stuck keys;
 - OTA during an idle paired session succeeds and leaves no held key;
 - an intentionally bad application boot reaches ESPHome recovery behavior.
@@ -302,7 +317,9 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 - analog threshold/hysteresis in both directions;
 - duplicate physical-to-HID mappings;
 - malformed/truncated frames and fuzzed lengths;
-- report rollover behavior.
+- report rollover behavior;
+- idle timeout boundaries, activity resets, sleep/wake re-arm, the suppression
+  cap, and every interval across the `millis()` rollover.
 
 ### CI
 
@@ -332,7 +349,8 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 | Wi-Fi + central BLE + peripheral BLE pressure RAM/radio | Minimal ESPHome config, no web server by default, fixed buffers, heap telemetry, endurance gate. |
 | Analog lever meaning/sign varies | Capture raw signed values, calibrate each side, use YAML thresholds and hysteresis. |
 | Proprietary protocol changes | Proper protobuf parsing, manufacturer/service filters, sanitized fixtures, protocol version notes. |
-| Stuck keys after packet or link loss | Whole-report generation plus empty report on every teardown/OTA path. |
+| Stuck keys after packet or link loss | Whole-report generation plus empty report on every teardown/OTA path, and a client-state check that catches a teardown ESPHome completes without a node event. |
+| Controller batteries drained by an unattended bridge | Release the Ride link after an idle timeout and refuse to reconnect until the controllers have actually slept and been woken. |
 | iPad bonding changes during firmware updates | Preserve NVS/partition layout; test OTA reboot and re-pair recovery before endurance work. |
 | Upstream GPL code provenance | GPL-3.0-only repo, prominent Zword attribution, and exact SHA/file records before importing or adapting code. |
 
@@ -341,7 +359,7 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 The XIAO is adopted, online, and accepts password-protected OTA updates. Automatic Ride Left selection and the upper/middle/lower physical ordering were confirmed by live capture. These remaining inputs block final behavior and endurance sign-off:
 
 - which sign of each analog lever should be considered steering vs braking on the physical bike.
-- controller sleep timing and the desired long-idle scan backoff after Ride disconnects.
+- how long the controllers take to stop advertising after they are released, which decides whether the 30-second `sleep_confirmation` window is generous enough.
 
 Known hardware/configuration facts:
 

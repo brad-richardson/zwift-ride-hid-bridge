@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "components/zwift_ride_hid/idle_policy.h"
 #include "components/zwift_ride_hid/input_state.h"
 #include "components/zwift_ride_hid/keymap.h"
 #include "components/zwift_ride_hid/ride_discovery.h"
@@ -652,6 +653,152 @@ void test_ride_left_manufacturer_discriminator() {
       false, bridge::kZwiftCompanyId, ride_left, sizeof(ride_left)));
 }
 
+bridge::RideIdlePolicy idle_policy(uint32_t idle_timeout_ms = 900000,
+                                   uint32_t sleep_confirm_ms = 30000,
+                                   uint32_t max_suppression_ms = 3600000) {
+  bridge::RideIdlePolicy policy;
+  policy.set_config(bridge::RideIdleConfig{idle_timeout_ms, sleep_confirm_ms,
+                                           max_suppression_ms});
+  return policy;
+}
+
+void test_idle_timeout_boundary_and_activity_resets() {
+  auto policy = idle_policy();
+  policy.on_session_ready(1000);
+
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(900999, true));
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_EQ(899999U, policy.idle_elapsed_ms(900999));
+
+  // Any transition, or a still-held control, restarts the quiet window.
+  policy.on_activity(900999);
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(1800998, true));
+  EXPECT_EQ(0U, policy.idle_disconnect_count());
+
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(1800999, true));
+  EXPECT_TRUE(policy.suppressed());
+  EXPECT_FALSE(policy.sleep_confirmed());
+  EXPECT_EQ(1U, policy.idle_disconnect_count());
+
+  // The decision is reported once; the caller owns the disconnect from there.
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(1801000, false));
+}
+
+void test_idle_timeout_can_be_disabled() {
+  auto policy = idle_policy(0);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(UINT32_MAX / 2, true));
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_EQ(0U, policy.idle_disconnect_count());
+}
+
+void test_suppression_waits_for_a_real_sleep_wake_cycle() {
+  auto policy = idle_policy(900000, 30000, 3600000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(900000, true));
+
+  // The controller is still awake from the session that was just dropped.
+  // Its advertisements must not reconnect the bridge, and each one restarts
+  // the absence window.
+  for (uint32_t now = 905000; now <= 1100000U; now += 5000) {
+    EXPECT_FALSE(policy.on_advertisement(now));
+    EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(now, false));
+    EXPECT_FALSE(policy.sleep_confirmed());
+    EXPECT_TRUE(policy.suppressed());
+  }
+
+  // Advertising stops. One millisecond short of the window is still not sleep.
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(1129999, false));
+  EXPECT_FALSE(policy.sleep_confirmed());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(1130000, false));
+  EXPECT_TRUE(policy.sleep_confirmed());
+
+  // Waking the controllers reconnects on that same advertisement.
+  EXPECT_TRUE(policy.on_advertisement(2000000));
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_FALSE(policy.sleep_confirmed());
+  EXPECT_EQ(1U, policy.idle_disconnect_count());
+
+  // Advertisements outside suppression are ignored.
+  EXPECT_FALSE(policy.on_advertisement(2000001));
+}
+
+void test_suppression_cap_recovers_a_controller_that_never_sleeps() {
+  auto policy = idle_policy(900000, 30000, 3600000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(900000, true));
+
+  // A controller that advertises forever never confirms sleep, so only the cap
+  // can return the bridge to service.
+  for (uint32_t now = 901000; now < 4500000U; now += 1000) {
+    EXPECT_FALSE(policy.on_advertisement(now));
+    EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(now, false));
+  }
+  EXPECT_TRUE(policy.suppressed());
+  EXPECT_EQ(bridge::RideIdleAction::REARM, policy.poll(4500000, false));
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(4500001, false));
+}
+
+void test_suppression_cap_can_be_disabled() {
+  auto policy = idle_policy(900000, 30000, 0);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(900000, true));
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(900000 + 86400000U, false));
+  EXPECT_TRUE(policy.suppressed());
+}
+
+void test_reconnect_and_reset_always_clear_suppression() {
+  auto policy = idle_policy();
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(900000, true));
+  EXPECT_TRUE(policy.poll(1000000, false) == bridge::RideIdleAction::NONE);
+
+  // A handshake that arrives by any route wins over stale suppression.
+  policy.on_session_ready(1000000);
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(1900000 - 1, true));
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(1900000, true));
+  EXPECT_EQ(2U, policy.idle_disconnect_count());
+
+  // OTA/shutdown resets keep the counter but never leave the bridge refusing
+  // to reconnect.
+  policy.reset(1900001);
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_EQ(2U, policy.idle_disconnect_count());
+
+  // A live session observed while suppression is somehow still set clears it
+  // and restarts the quiet window rather than disconnecting again immediately.
+  auto recovered = idle_policy();
+  recovered.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, recovered.poll(900000, true));
+  EXPECT_EQ(bridge::RideIdleAction::NONE, recovered.poll(900001, true));
+  EXPECT_FALSE(recovered.suppressed());
+  EXPECT_EQ(1U, recovered.idle_disconnect_count());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, recovered.poll(1800000, true));
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, recovered.poll(1800001, true));
+}
+
+void test_idle_timings_survive_the_millis_rollover() {
+  auto policy = idle_policy(900000, 30000, 3600000);
+  const uint32_t before_wrap = UINT32_MAX - 450000U;
+  policy.on_session_ready(before_wrap);
+
+  const uint32_t just_short = static_cast<uint32_t>(before_wrap + 899999U);
+  const uint32_t at_timeout = static_cast<uint32_t>(before_wrap + 900000U);
+  EXPECT_TRUE(just_short < before_wrap);  // the counter really did wrap
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(just_short, true));
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(at_timeout, true));
+
+  const uint32_t sleep_short = static_cast<uint32_t>(at_timeout + 29999U);
+  const uint32_t slept = static_cast<uint32_t>(at_timeout + 30000U);
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(sleep_short, false));
+  EXPECT_FALSE(policy.sleep_confirmed());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(slept, false));
+  EXPECT_TRUE(policy.sleep_confirmed());
+  EXPECT_TRUE(policy.on_advertisement(slept));
+}
+
 using TestFunction = void (*)();
 
 void run_test(const char *name, TestFunction function) {
@@ -677,6 +824,13 @@ int main() {
   run_test("report holds, duplicates, and release", test_report_holds_chords_duplicates_and_release);
   run_test("report modifiers and 6KRO overflow", test_report_modifiers_and_six_key_overflow);
   run_test("Ride Left manufacturer discriminator", test_ride_left_manufacturer_discriminator);
+  run_test("idle timeout boundary and activity resets", test_idle_timeout_boundary_and_activity_resets);
+  run_test("idle timeout can be disabled", test_idle_timeout_can_be_disabled);
+  run_test("suppression waits for a sleep/wake cycle", test_suppression_waits_for_a_real_sleep_wake_cycle);
+  run_test("suppression cap recovers a controller that never sleeps", test_suppression_cap_recovers_a_controller_that_never_sleeps);
+  run_test("suppression cap can be disabled", test_suppression_cap_can_be_disabled);
+  run_test("reconnect and reset clear suppression", test_reconnect_and_reset_always_clear_suppression);
+  run_test("idle timings survive the millis rollover", test_idle_timings_survive_the_millis_rollover);
 
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed across " << tests_run << " tests\n";

@@ -9,6 +9,7 @@ add_executable(
   "${PROJECT_ROOT}/components/zwift_ride_hid/ride_protocol.cpp"
   "${PROJECT_ROOT}/components/zwift_ride_hid/input_state.cpp"
   "${PROJECT_ROOT}/components/zwift_ride_hid/keymap.cpp"
+  "${PROJECT_ROOT}/components/zwift_ride_hid/idle_policy.cpp"
 )
 
 target_include_directories(zwift_ride_hid_host_tests PRIVATE "${PROJECT_ROOT}")

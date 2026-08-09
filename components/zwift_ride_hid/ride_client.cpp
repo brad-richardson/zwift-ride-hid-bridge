@@ -186,6 +186,21 @@ void RideClient::gattc_event_handler(esp_gattc_cb_event_t event,
 void RideClient::loop() {
   if (this->client_ == nullptr) return;
 
+  // ESPHome's own ten-second DISCONNECTING watchdog forces its client back to
+  // IDLE through set_idle_() without dispatching CLOSE/DISCONNECT to nodes, and
+  // a failed setup can park this helper in ERROR where no state watchdog runs.
+  // Either case would otherwise leave the bridge reporting a live session and
+  // holding keys until some later connection happened to arrive.
+  if (this->state_ != RideClientState::DISCONNECTED &&
+      this->client_->state() == esp32_ble_tracker::ClientState::IDLE) {
+    ESP_LOGW(TAG,
+             "Ride client returned to idle without a disconnect event while in "
+             "%s; treating the session as lost",
+             ride_client_state_to_string(this->state_));
+    this->report_disconnected_();
+    return;
+  }
+
   const uint32_t now = millis();
 
   if (this->haptic_write_pending_ &&

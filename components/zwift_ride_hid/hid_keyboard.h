@@ -53,10 +53,8 @@ public:
   /** Resume report output; advertising remains gated by its upstream source. */
   void resume();
 
-  /** Release all keys, disconnect the HID host, and stop advertising. */
-  void stop();
-
-  /** Release all keys, disconnect, and suppress reports until resume(). */
+  /** Release all keys, disconnect the HID host, stop advertising, and suppress
+   * reports until resume(). */
   void quiesce();
 
   bool send_report(uint8_t modifiers, const uint8_t *key_usages,

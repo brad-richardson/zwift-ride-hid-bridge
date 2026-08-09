@@ -1,6 +1,6 @@
 # Hardware test checklist
 
-The repository is a feature-complete candidate in live hardware validation. On 2026-08-09, the target XIAO auto-discovered Ride Left, completed the handshake, received Right-side input, paired with an iPad, reconnected both links after OTA, captured every digital input and both lever channels, and stopped its scanner during the active session. The remaining unchecked items still matter: especially sleep/loss recovery, held-key OTA teardown, exact emitted keys after the captured-mask correction, haptics, and endurance.
+The repository is a feature-complete candidate in live hardware validation. On 2026-08-09, the target XIAO auto-discovered Ride Left, completed the handshake, received Right-side input, paired with an iPad, reconnected both links after OTA, captured every digital input and both lever channels, and stopped its scanner during the active session. The remaining unchecked items still matter: especially the idle disconnect and sleep/wake reconnect, other loss recovery, held-key OTA teardown, exact emitted keys after the captured-mask correction, haptics, and endurance.
 
 Record the tested full Git SHA, ESPHome version, controller firmware versions, iPad model/iPadOS version, observations, and firmware-size summary with the results.
 
@@ -18,8 +18,9 @@ Record the tested full Git SHA, ESPHome version, controller firmware versions, i
 
 - [ ] XIAO joins Wi-Fi and appears through the encrypted Home Assistant API.
 - [ ] `Bridge State`, `Ride Controller Connected`, `HID Host Ready`, and `Bridge Ready` agree with serial logs.
-- [ ] Active-low GPIO21 LED follows the intended states: one 200 ms blink every 1.5 seconds while starting/scanning or when only HID is ready; two 100 ms blinks every two seconds with Ride ready but no HID host; solid with both links ready; 100 ms on/off during OTA; three 100 ms blinks every two seconds on an error; and off when stopped.
-- [ ] `Invalid Ride Frame Count`, `Ride Reconnect Count`, and `HID Report Count` are monotonic and plausible.
+- [ ] Active-low GPIO21 LED follows the intended states: one 200 ms blink every 1.5 seconds while starting/scanning or when only HID is ready; 100 ms on/off every 500 ms while connecting to Ride; one 100 ms blink every five seconds while deliberately idle-disconnected; two 100 ms blinks every two seconds with Ride ready but no HID host; solid with both links ready; 100 ms on/off during OTA; three 100 ms blinks every two seconds on an error; and off when stopped.
+- [ ] `Bridge State` reports `connecting` during handshake rather than `scanning`, and `ride_idle_sleeping` after an idle disconnect.
+- [ ] `Invalid Ride Frame Count`, `Ride Reconnect Count`, `Ride Idle Disconnect Count`, `Ride Setup Timeout Count`, `Ride Haptic Timeout Count`, and `HID Report Count` are monotonic and plausible.
 - [ ] Raw lever entities remain disabled in Home Assistant unless actively calibrating them.
 
 Treat exact LED timing as diagnostic rather than a public API until it has been observed on hardware.
@@ -77,10 +78,29 @@ Expected diagnostic keys are arrows; `a/b/y/z`; F1–F4 for LS1/LS2/LB/left logo
 - [ ] Test holds and gameplay chords in NES, SNES, GB/GBC, GBA, DS, and Genesis; record saved per-system overrides.
 - [ ] Confirm N64 is documented as unsupported and is not presented as a working universal mapping.
 
+## Idle disconnect and controller sleep
+
+The bridge releases the Ride link after `idle_timeout.disconnect_after` of no
+input so the controllers can use their own sleep behavior instead of being held
+awake. Temporarily shortening `disconnect_after` to `1min` and
+`sleep_confirmation` to `5s` makes these checks practical; restore the
+production values and re-install before signing anything off.
+
+- [ ] With Ride ready and no input, confirm the link drops after the configured interval, `Ride Idle Disconnect Count` increments, and the log reads `No Ride input for ... disconnecting so the controllers can sleep`.
+- [ ] Confirm no key is left held and that an already-connected iPad stays paired and attached, with `Zwift Ride KB` no longer advertised.
+- [ ] Immediately after the disconnect, confirm the bridge does **not** reconnect while the controllers are still advertising, even across several minutes.
+- [ ] Let the controllers actually sleep. Measure how long that takes; it determines whether `sleep_confirmation` is generous enough.
+- [ ] Press a control to wake them and confirm the bridge reconnects on that advertisement, `Bridge State` returns to `ready`, and input works without touching the iPad.
+- [ ] Hold one control continuously across the timeout and confirm the link is **not** dropped: a held input is use, not idle.
+- [ ] Confirm lever noise below `press_threshold` does not keep the session alive.
+- [ ] Confirm `max_suppression` recovers the link if the controllers somehow never stop advertising, and that the log says so.
+- [ ] Begin an OTA while idle-suppressed, then abort it, and confirm the bridge reconnects instead of staying suppressed.
+
 ## Disconnect and reconnect safety
 
 - [ ] Turn off Ride during a held key. The HID host must receive an empty report and no key may remain stuck.
 - [ ] Let the controllers sleep, wake them, and verify Ride returns to ready without rebooting the ESP32.
+- [ ] Force ESPHome's ten-second disconnect watchdog (for example by pulling controller power at the moment of a disconnect) and confirm the bridge reports the session lost rather than continuing to claim `ready`.
 - [ ] Power Right before Left and Left before Right; tunneled input should recover in either order.
 - [ ] Turn iPad Bluetooth off during a held key, turn it back on, and verify reconnect plus clean subsequent input.
 - [ ] Reboot the ESP32 and confirm both Ride and the bonded iPad reconnect without re-pairing.
@@ -102,6 +122,7 @@ OTA is application-level recovery, not a substitute for USB. It cannot repair ev
 
 - [ ] Complete a 45-minute Delta session with holds, chords, both controller halves, and one controller sleep/wake cycle.
 - [ ] Run a four-hour idle/reconnect/input loop.
-- [ ] Record minimum free heap, largest free block if available, reconnect count, invalid-frame count, unexpected release-all/6KRO warnings, and BLE event drops.
+- [ ] Leave the bridge unattended overnight and confirm the controllers still have usable battery in the morning, with an idle-disconnect count that matches the number of quiet periods rather than a reconnect flap.
+- [ ] Record minimum free heap, largest free block if available, reconnect count, idle-disconnect count, invalid-frame count, unexpected release-all/6KRO warnings, and BLE event drops.
 - [ ] Confirm no steadily growing memory use, repeated pairing prompts, stuck keys, haptic write storm, or degraded input latency.
 - [ ] Mark a specific full Git SHA known-good only after all required checks pass.

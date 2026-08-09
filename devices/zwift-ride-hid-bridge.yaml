@@ -120,6 +120,19 @@ zwift_ride_hid:
     # Per-button vibration can be distracting and adds BLE writes, so it is
     # opt-in even though the bridge supports it.
     button_feedback: false
+  # The controllers stay awake while any central holds their GATT link, so an
+  # unattended bridge would flatten their batteries. Releasing the link lets
+  # them use their own sleep behavior; reconnecting is fast enough that the
+  # trade is worth it.
+  idle_timeout:
+    disconnect_after: 15min
+    # A just-released controller keeps advertising for a while. Waiting for a
+    # gap this long proves it actually slept, so pressing a button to wake it
+    # is what reconnects the bridge rather than the same still-awake session.
+    sleep_confirmation: 30s
+    # Safety net for a controller that never stops advertising: reconnect
+    # anyway rather than staying offline until the next reboot.
+    max_suppression: 60min
   # GPIO21 is the XIAO ESP32-S3's active-low orange user LED. The component
   # owns it so its pattern can describe Ride, HID, fault, and OTA state.
   status_led:
@@ -140,6 +153,12 @@ zwift_ride_hid:
       name: Invalid Ride Frame Count
     hid_report_count:
       name: HID Report Count
+    idle_disconnect_count:
+      name: Ride Idle Disconnect Count
+    setup_timeout_count:
+      name: Ride Setup Timeout Count
+    haptic_timeout_count:
+      name: Ride Haptic Timeout Count
     left_lever:
       name: Left Lever Raw
       disabled_by_default: true
