@@ -60,11 +60,19 @@ class RideIdlePolicy {
 
   /** A matching Ride Left advertisement was received.
    *
+   * Always records the sighting, whether or not the bridge is suppressed, so
+   * the advertising diagnostics mean something during a normal session too.
+   *
    * Returns true when this advertisement ends suppression, in which case the
    * caller should re-enable its BLE client before the advertisement reaches
    * the stock client so the same scan result can drive the reconnection.
    */
   bool on_advertisement(uint32_t now);
+
+  /** Abandon suppression because something outside the timeout asked for the
+   * controllers back — a Home Assistant button, an automation, a service call.
+   */
+  void request_reconnect(uint32_t now);
 
   /// Called every loop with the live session state. See RideIdleAction.
   RideIdleAction poll(uint32_t now, bool session_ready);
@@ -81,6 +89,22 @@ class RideIdlePolicy {
     return static_cast<uint32_t>(now - this->last_activity_ms_);
   }
 
+  /// True once any matching advertisement has been seen since boot. Until then
+  /// the age below is meaningless rather than merely large.
+  bool has_advertisement() const { return this->has_advertisement_; }
+
+  /// Time since the controller was last seen advertising.
+  uint32_t advertisement_age_ms(uint32_t now) const {
+    return static_cast<uint32_t>(now - this->last_advertisement_ms_);
+  }
+
+  /** True while the controller counts as awake and broadcasting.
+   *
+   * Deliberately the same comparison that arms the re-arm, so a diagnostic
+   * reading false means the next advertisement will reconnect.
+   */
+  bool advertising(uint32_t now) const;
+
  protected:
   void begin_suppression_(uint32_t now);
 
@@ -91,6 +115,7 @@ class RideIdlePolicy {
   uint32_t idle_disconnect_count_{0};
   bool suppressed_{false};
   bool sleep_confirmed_{false};
+  bool has_advertisement_{false};
 };
 
 }  // namespace esphome::zwift_ride_hid

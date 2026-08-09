@@ -28,18 +28,31 @@ void RideIdlePolicy::on_session_ready(uint32_t now) {
 void RideIdlePolicy::on_activity(uint32_t now) { this->last_activity_ms_ = now; }
 
 bool RideIdlePolicy::on_advertisement(uint32_t now) {
-  if (!this->suppressed_) {
-    return false;
-  }
-  if (!this->sleep_confirmed_) {
-    // The controller is still awake from the session that was just dropped.
-    // Restart the absence window instead of reconnecting straight back into it.
-    this->last_advertisement_ms_ = now;
+  const bool wakes = this->suppressed_ && this->sleep_confirmed_;
+  // Record the sighting either way. Outside suppression this only feeds the
+  // advertising diagnostics; inside it, an advertisement from a controller that
+  // has not yet slept restarts the absence window rather than reconnecting
+  // straight back into the session that was just dropped.
+  this->last_advertisement_ms_ = now;
+  this->has_advertisement_ = true;
+  if (!wakes) {
     return false;
   }
   this->suppressed_ = false;
   this->sleep_confirmed_ = false;
   return true;
+}
+
+void RideIdlePolicy::request_reconnect(uint32_t now) {
+  this->suppressed_ = false;
+  this->sleep_confirmed_ = false;
+  this->last_activity_ms_ = now;
+}
+
+bool RideIdlePolicy::advertising(uint32_t now) const {
+  return this->has_advertisement_ &&
+         !timeout_elapsed(now, this->last_advertisement_ms_,
+                          this->config_.sleep_confirm_ms);
 }
 
 RideIdleAction RideIdlePolicy::poll(uint32_t now, bool session_ready) {
@@ -86,9 +99,11 @@ void RideIdlePolicy::begin_suppression_(uint32_t now) {
   this->suppressed_ = true;
   this->sleep_confirmed_ = false;
   this->suppressed_since_ms_ = now;
-  // The controller was advertising moments ago by definition; treat the
-  // disconnect itself as the most recent sighting.
+  // The controller was demonstrably present a moment ago, so treat the
+  // disconnect itself as the most recent sighting. Without this the
+  // advertising diagnostic would read "gone" the instant the link dropped.
   this->last_advertisement_ms_ = now;
+  this->has_advertisement_ = true;
   this->idle_disconnect_count_++;
 }
 

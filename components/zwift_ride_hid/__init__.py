@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
+from esphome import automation
 from esphome import codegen as cg
 from esphome import config_validation as cv
 from esphome import pins
@@ -19,6 +20,7 @@ from esphome.const import (
     ENTITY_CATEGORY_DIAGNOSTIC,
     ICON_COUNTER,
     STATE_CLASS_MEASUREMENT,
+    UNIT_SECOND,
 )
 
 DEPENDENCIES = ["esp32", "ble_client", "esp32_ble"]
@@ -27,6 +29,8 @@ AUTO_LOAD = ["binary_sensor", "sensor", "text_sensor"]
 CONF_ANALOG_LEVERS = "analog_levers"
 CONF_BUTTON_FEEDBACK = "button_feedback"
 CONF_CONNECT_CONFIRMATION = "connect_confirmation"
+CONF_ADVERTISEMENT_AGE = "advertisement_age"
+CONF_DEBUG_ADVERTISEMENTS = "debug_advertisements"
 CONF_DEBUG_CAPTURE = "debug_capture"
 CONF_DIAGNOSTICS = "diagnostics"
 CONF_DISCONNECT_AFTER = "disconnect_after"
@@ -45,7 +49,9 @@ CONF_PRESS_THRESHOLD = "press_threshold"
 CONF_PROFILE = "profile"
 CONF_READY = "ready"
 CONF_RECONNECT_COUNT = "reconnect_count"
+CONF_RELEASE_HID = "release_hid"
 CONF_RELEASE_THRESHOLD = "release_threshold"
+CONF_RIDE_ADVERTISING = "ride_advertising"
 CONF_RIDE_CONNECTED = "ride_connected"
 CONF_RIGHT_LEVER = "right_lever"
 CONF_SETUP_TIMEOUT_COUNT = "setup_timeout_count"
@@ -63,6 +69,7 @@ zwift_ride_hid_ns = cg.esphome_ns.namespace("zwift_ride_hid")
 ZwiftRideHid = zwift_ride_hid_ns.class_(
     "ZwiftRideHid", cg.Component, ble_client.BLEClientNode
 )
+ReconnectAction = zwift_ride_hid_ns.class_("ReconnectAction", automation.Action)
 
 ANALOG_LEVER_SCHEMA = cv.Schema(
     {
@@ -113,6 +120,9 @@ IDLE_TIMEOUT_SCHEMA = cv.Schema(
         cv.Optional(CONF_MAX_SUPPRESSION, default="60min"): _interval(
             60 * 1000, zero_disables=True
         ),
+        # A connected keyboard makes iPadOS hide its on-screen keyboard, so the
+        # bonded host is released for the duration of a long idle period.
+        cv.Optional(CONF_RELEASE_HID, default=True): cv.boolean,
     }
 )
 
@@ -128,6 +138,18 @@ DIAGNOSTICS_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_READY): binary_sensor.binary_sensor_schema(
             device_class=DEVICE_CLASS_CONNECTIVITY,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        # False means the controllers have been quiet for sleep_confirmation,
+        # so the next advertisement will reconnect.
+        cv.Optional(CONF_RIDE_ADVERTISING): binary_sensor.binary_sensor_schema(
+            device_class=DEVICE_CLASS_CONNECTIVITY,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_ADVERTISEMENT_AGE): sensor.sensor_schema(
+            unit_of_measurement=UNIT_SECOND,
+            accuracy_decimals=1,
+            state_class=STATE_CLASS_MEASUREMENT,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         ),
         cv.Optional(CONF_STATE): text_sensor.text_sensor_schema(
@@ -224,6 +246,10 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_STATUS_LED): pins.gpio_output_pin_schema,
             cv.Optional(CONF_DIAGNOSTICS, default={}): DIAGNOSTICS_SCHEMA,
             cv.Optional(CONF_DEBUG_CAPTURE, default=False): cv.boolean,
+            # Logs every matching Ride advertisement with its manufacturer
+            # payload, flags, and interval. Needed to establish the real
+            # advertising cadence before sleep_confirmation can be tightened.
+            cv.Optional(CONF_DEBUG_ADVERTISEMENTS, default=False): cv.boolean,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -236,6 +262,17 @@ CONFIG_SCHEMA = cv.All(
 
 # One connection is Ride Left (reserved by ble_client) and one is the HID host.
 FINAL_VALIDATE_SCHEMA = esp32_ble.consume_connection_slots(1, "zwift_ride_hid")
+
+
+@automation.register_action(
+    "zwift_ride_hid.reconnect",
+    ReconnectAction,
+    cv.Schema({cv.GenerateID(): cv.use_id(ZwiftRideHid)}),
+)
+async def reconnect_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
 
 
 async def to_code(config):
@@ -271,6 +308,7 @@ async def to_code(config):
     cg.add(var.set_connect_haptic(haptics[CONF_CONNECT_CONFIRMATION]))
     cg.add(var.set_button_haptic(haptics[CONF_BUTTON_FEEDBACK]))
     cg.add(var.set_debug_capture(config[CONF_DEBUG_CAPTURE]))
+    cg.add(var.set_debug_advertisements(config[CONF_DEBUG_ADVERTISEMENTS]))
 
     idle = config[CONF_IDLE_TIMEOUT]
     cg.add(
@@ -280,6 +318,7 @@ async def to_code(config):
             idle[CONF_MAX_SUPPRESSION].total_milliseconds,
         )
     )
+    cg.add(var.set_release_hid_when_idle(idle[CONF_RELEASE_HID]))
 
     if CONF_STATUS_LED in config:
         pin = await cg.gpio_pin_expression(config[CONF_STATUS_LED])
@@ -290,6 +329,11 @@ async def to_code(config):
         CONF_RIDE_CONNECTED: (binary_sensor.new_binary_sensor, "set_ride_connected_sensor"),
         CONF_HID_CONNECTED: (binary_sensor.new_binary_sensor, "set_hid_connected_sensor"),
         CONF_READY: (binary_sensor.new_binary_sensor, "set_ready_sensor"),
+        CONF_RIDE_ADVERTISING: (
+            binary_sensor.new_binary_sensor,
+            "set_ride_advertising_sensor",
+        ),
+        CONF_ADVERTISEMENT_AGE: (sensor.new_sensor, "set_advertisement_age_sensor"),
         CONF_STATE: (text_sensor.new_text_sensor, "set_state_text_sensor"),
         CONF_RECONNECT_COUNT: (sensor.new_sensor, "set_reconnect_count_sensor"),
         CONF_INVALID_FRAME_COUNT: (sensor.new_sensor, "set_invalid_frame_count_sensor"),

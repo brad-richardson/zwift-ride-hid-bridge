@@ -779,6 +779,53 @@ void test_reconnect_and_reset_always_clear_suppression() {
   EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, recovered.poll(1800001, true));
 }
 
+void test_advertising_diagnostics_track_sightings_outside_suppression() {
+  auto policy = idle_policy(900000, 30000, 3600000);
+
+  // Nothing has been seen yet, so the age is meaningless rather than huge.
+  EXPECT_FALSE(policy.has_advertisement());
+  EXPECT_FALSE(policy.advertising(0));
+
+  // Sightings are recorded during a normal session too, so the diagnostic
+  // means something before the first idle disconnect.
+  policy.on_session_ready(1000);
+  EXPECT_FALSE(policy.on_advertisement(2000));
+  EXPECT_TRUE(policy.has_advertisement());
+  EXPECT_TRUE(policy.advertising(2000));
+  EXPECT_EQ(0U, policy.advertisement_age_ms(2000));
+  EXPECT_EQ(5000U, policy.advertisement_age_ms(7000));
+
+  // "Advertising" uses the same comparison that arms the re-arm, so it going
+  // false is exactly the promise that the next advertisement reconnects.
+  EXPECT_TRUE(policy.advertising(31999));
+  EXPECT_FALSE(policy.advertising(32000));
+
+  // Recording a sighting must never disturb an unsuppressed idle timer.
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(900999, true));
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(901000, true));
+}
+
+void test_reconnect_request_overrides_suppression() {
+  auto policy = idle_policy(900000, 30000, 3600000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(900000, true));
+  EXPECT_TRUE(policy.suppressed());
+
+  // The controllers are still advertising, so the sleep/wake path cannot fire.
+  EXPECT_FALSE(policy.on_advertisement(910000));
+  EXPECT_FALSE(policy.sleep_confirmed());
+
+  // An explicit request is the escape hatch and takes effect immediately.
+  policy.request_reconnect(910001);
+  EXPECT_FALSE(policy.suppressed());
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(910002, false));
+
+  // It also restarts the quiet window rather than disconnecting again at once.
+  EXPECT_EQ(bridge::RideIdleAction::NONE, policy.poll(1810000, true));
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(1810001, true));
+  EXPECT_EQ(2U, policy.idle_disconnect_count());
+}
+
 void test_idle_timings_survive_the_millis_rollover() {
   auto policy = idle_policy(900000, 30000, 3600000);
   const uint32_t before_wrap = UINT32_MAX - 450000U;
@@ -830,6 +877,8 @@ int main() {
   run_test("suppression cap recovers a controller that never sleeps", test_suppression_cap_recovers_a_controller_that_never_sleeps);
   run_test("suppression cap can be disabled", test_suppression_cap_can_be_disabled);
   run_test("reconnect and reset clear suppression", test_reconnect_and_reset_always_clear_suppression);
+  run_test("advertising diagnostics track sightings", test_advertising_diagnostics_track_sightings_outside_suppression);
+  run_test("reconnect request overrides suppression", test_reconnect_request_overrides_suppression);
   run_test("idle timings survive the millis rollover", test_idle_timings_survive_the_millis_rollover);
 
   if (failures != 0) {

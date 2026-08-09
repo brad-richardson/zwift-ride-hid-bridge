@@ -16,6 +16,7 @@ namespace {
 static const char *const TAG = "zwift_ride_hid";
 static constexpr uint32_t HAPTIC_MIN_INTERVAL_MS = 1000;
 static constexpr uint32_t DIAGNOSTIC_MAX_RATE_MS = 1000;
+static constexpr uint32_t ADVERTISEMENT_AGE_REFRESH_MS = 5000;
 
 bool reports_equal(const KeyboardReport &left, const KeyboardReport &right) {
   return std::memcmp(&left, &right, sizeof(KeyboardReport)) == 0;
@@ -148,6 +149,21 @@ void ZwiftRideHid::loop() {
     this->diagnostics_dirty_ = true;
   }
 
+  const uint32_t diagnostics_now = millis();
+  const bool advertising_now = this->idle_policy_.advertising(diagnostics_now);
+  if (advertising_now != this->advertising_published_) {
+    this->advertising_published_ = advertising_now;
+    this->diagnostics_dirty_ = true;
+  }
+  // The advertisement age only changes meaning while the bridge is waiting for
+  // the controllers to sleep, so it is refreshed on a slow cadence there and
+  // left to ordinary change-driven publishing everywhere else.
+  if (this->ride_idle_suppressed_ &&
+      diagnostics_now - this->last_diagnostics_ms_ >=
+          ADVERTISEMENT_AGE_REFRESH_MS) {
+    this->diagnostics_dirty_ = true;
+  }
+
   this->publish_diagnostics_();
   this->update_status_led_();
 }
@@ -176,7 +192,11 @@ void ZwiftRideHid::dump_config() {
                   "  Maximum suppression: %" PRIu32 " s",
                   idle.idle_timeout_ms / 1000U, idle.sleep_confirm_ms / 1000U,
                   idle.max_suppression_ms / 1000U);
+    ESP_LOGCONFIG(TAG, "  Release HID host when idle: %s",
+                  YESNO(this->release_hid_when_idle_));
   }
+  ESP_LOGCONFIG(TAG, "  Advertisement capture: %s",
+                YESNO(this->debug_advertisements_));
   if (this->ride_address_selected_) {
     ESP_LOGCONFIG(TAG, "  Selected Ride Left: %s", this->parent()->address_str());
   }
@@ -199,6 +219,19 @@ bool ZwiftRideHid::parse_device(
   if (this->ride_address_selected_) {
     if (advertised_address != this->selected_ride_address_)
       return false;
+    if (this->debug_advertisements_) {
+      const uint8_t *payload = nullptr;
+      size_t payload_length = 0;
+      for (const auto &manufacturer_data : device.get_manufacturer_datas()) {
+        const auto uuid = manufacturer_data.uuid.get_uuid();
+        if (uuid.len == ESP_UUID_LEN_16 && uuid.uuid.uuid16 == kZwiftCompanyId) {
+          payload = manufacturer_data.data.data();
+          payload_length = manufacturer_data.data.size();
+          break;
+        }
+      }
+      this->log_advertisement_(device, payload, payload_length);
+    }
     return this->note_ride_advertisement_();
   }
 
@@ -257,6 +290,46 @@ bool ZwiftRideHid::parse_device(
   return true;
 }
 
+void ZwiftRideHid::log_advertisement_(
+    const esp32_ble_tracker::ESPBTDevice &device,
+    const uint8_t *manufacturer_payload, size_t manufacturer_payload_length) {
+  const uint32_t now = millis();
+  // Interval between sightings is the number that decides whether a short
+  // sleep_confirmation can ever be safe, so it is logged alongside the payload.
+  const uint32_t since_previous =
+      this->last_logged_advertisement_ms_ == 0
+          ? 0
+          : static_cast<uint32_t>(now - this->last_logged_advertisement_ms_);
+  this->last_logged_advertisement_ms_ = now;
+
+  char payload_hex[kZwiftRideManufacturerPayloadLength * 3 + 16]{};
+  size_t cursor = 0;
+  for (size_t i = 0; i < manufacturer_payload_length &&
+                     cursor + 3 < sizeof(payload_hex);
+       i++) {
+    const int written =
+        std::snprintf(payload_hex + cursor, sizeof(payload_hex) - cursor,
+                      "%02X%s", manufacturer_payload[i],
+                      i + 1 == manufacturer_payload_length ? "" : " ");
+    if (written <= 0)
+      break;
+    cursor += static_cast<size_t>(written);
+  }
+
+  const auto &scan_result = device.get_scan_result();
+  ESP_LOGD(TAG,
+           "Ride adv +%" PRIu32 " ms rssi=%d flags=0x%02X adv_len=%u "
+           "rsp_len=%u evt=%u mfg=[%s] name='%s'",
+           since_previous, device.get_rssi(),
+           device.get_ad_flag().has_value()
+               ? static_cast<unsigned>(device.get_ad_flag().value())
+               : 0xFFU,
+           static_cast<unsigned>(scan_result.adv_data_len),
+           static_cast<unsigned>(scan_result.scan_rsp_len),
+           static_cast<unsigned>(scan_result.search_evt), payload_hex,
+           device.get_name().c_str());
+}
+
 bool ZwiftRideHid::note_ride_advertisement_() {
   if (!this->idle_policy_.on_advertisement(millis()))
     return false;
@@ -264,11 +337,30 @@ bool ZwiftRideHid::note_ride_advertisement_() {
   // The controller stopped advertising long enough to count as asleep and has
   // now woken up. Re-enabling here, before the stock client sees this same scan
   // result, lets it connect on this advertisement instead of the next one.
-  this->ride_idle_suppressed_ = false;
-  this->parent()->set_enabled(true);
-  this->diagnostics_dirty_ = true;
-  ESP_LOGI(TAG, "Ride Left woke and advertised again; reconnecting");
+  this->end_suppression_("Ride Left woke and advertised again");
   return true;
+}
+
+void ZwiftRideHid::end_suppression_(const char *reason) {
+  this->ride_idle_suppressed_ = false;
+  this->sleep_confirmed_logged_ = false;
+  if (this->parent() != nullptr)
+    this->parent()->set_enabled(true);
+  // resume() only clears the quiesce gate; advertising stays shut until
+  // on_ride_ready() re-opens it after a fresh handshake.
+  if (this->release_hid_when_idle_)
+    this->hid_keyboard_.resume();
+  this->diagnostics_dirty_ = true;
+  ESP_LOGI(TAG, "%s; reconnecting", reason);
+}
+
+void ZwiftRideHid::request_reconnect() {
+  if (!this->ride_idle_suppressed_) {
+    ESP_LOGD(TAG, "Reconnect requested while not idle-suppressed; ignoring");
+    return;
+  }
+  this->idle_policy_.request_reconnect(millis());
+  this->end_suppression_("Reconnect requested");
 }
 
 void ZwiftRideHid::ensure_ride_address_() {
@@ -304,11 +396,20 @@ void ZwiftRideHid::update_idle_policy_() {
       this->connect_haptic_pending_ = false;
       this->button_haptic_pending_ = false;
       this->release_all_("Ride idle timeout");
-      this->hid_keyboard_.set_advertising_allowed(false);
+      if (this->release_hid_when_idle_) {
+        // A connected keyboard makes iPadOS hide its on-screen keyboard, so an
+        // idle bridge would quietly cost the iPad its software keyboard for
+        // hours. Releasing the bonded host avoids that; it reconnects
+        // automatically once advertising resumes after a fresh handshake.
+        this->hid_keyboard_.quiesce();
+      } else {
+        this->hid_keyboard_.set_advertising_allowed(false);
+      }
       // set_enabled(false) disconnects and, unlike a bare disconnect(), also
       // stops auto-connect from immediately reclaiming the still-awake
-      // controller. An established HID host stays connected.
+      // controller.
       this->parent()->set_enabled(false);
+      this->sleep_confirmed_logged_ = false;
       this->diagnostics_dirty_ = true;
       ESP_LOGI(TAG,
                "No Ride input for %" PRIu32
@@ -317,17 +418,27 @@ void ZwiftRideHid::update_idle_policy_() {
       break;
 
     case RideIdleAction::REARM:
-      this->ride_idle_suppressed_ = false;
-      this->parent()->set_enabled(true);
-      this->diagnostics_dirty_ = true;
       ESP_LOGW(TAG,
                "Ride Left never stopped advertising within the %" PRIu32
-               " s suppression window; reconnecting anyway",
+               " s suppression window",
                this->idle_policy_.config().max_suppression_ms / 1000U);
+      this->end_suppression_("Suppression cap reached");
       break;
 
     case RideIdleAction::NONE:
       break;
+  }
+
+  // Announce the moment the bridge becomes willing to reconnect. Without this
+  // line, "nothing happened" is indistinguishable from a broken re-arm.
+  if (this->ride_idle_suppressed_ && this->idle_policy_.sleep_confirmed() &&
+      !this->sleep_confirmed_logged_) {
+    this->sleep_confirmed_logged_ = true;
+    this->diagnostics_dirty_ = true;
+    ESP_LOGI(TAG,
+             "Ride Left stopped advertising for %" PRIu32
+             " s; armed to reconnect on its next advertisement",
+             this->idle_policy_.config().sleep_confirm_ms / 1000U);
   }
 }
 
@@ -690,6 +801,13 @@ void ZwiftRideHid::publish_diagnostics_() {
   if (this->haptic_timeout_count_sensor_ != nullptr)
     this->haptic_timeout_count_sensor_->publish_state(
         this->ride_client_.haptic_timeout_count());
+  if (this->ride_advertising_sensor_ != nullptr)
+    this->ride_advertising_sensor_->publish_state(
+        this->idle_policy_.advertising(now));
+  if (this->advertisement_age_sensor_ != nullptr &&
+      this->idle_policy_.has_advertisement())
+    this->advertisement_age_sensor_->publish_state(
+        this->idle_policy_.advertisement_age_ms(now) / 1000.0f);
   if (this->expose_raw_) {
     if (this->left_lever_sensor_ != nullptr && this->input_state_.has_analog(0))
       this->left_lever_sensor_->publish_state(this->input_state_.analog(0));

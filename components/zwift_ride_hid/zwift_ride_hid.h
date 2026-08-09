@@ -10,8 +10,10 @@
 #include "esphome/components/esp32_ble/ble.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/gpio.h"
+#include "esphome/core/helpers.h"
 
 #ifdef USE_OTA_STATE_LISTENER
 #include "esphome/components/ota/ota_backend.h"
@@ -77,7 +79,19 @@ class ZwiftRideHid : public Component,
   void set_connect_haptic(bool enabled) { this->connect_haptic_ = enabled; }
   void set_button_haptic(bool enabled) { this->button_haptic_ = enabled; }
   void set_debug_capture(bool debug_capture) { this->debug_capture_ = debug_capture; }
+  void set_debug_advertisements(bool debug_advertisements) {
+    this->debug_advertisements_ = debug_advertisements;
+  }
+  void set_release_hid_when_idle(bool release) { this->release_hid_when_idle_ = release; }
   void set_status_led(GPIOPin *pin) { this->status_led_ = pin; }
+
+  /** Abandon idle suppression and reconnect as soon as the controller is seen.
+   *
+   * Exposed as the `zwift_ride_hid.reconnect` action so Home Assistant, a
+   * physical button, or an automation can always recover the session without
+   * waiting for the sleep/wake cycle or the suppression cap.
+   */
+  void request_reconnect();
   void set_idle_timeout(uint32_t idle_timeout_ms, uint32_t sleep_confirm_ms,
                         uint32_t max_suppression_ms) {
     this->idle_policy_.set_config(
@@ -105,6 +119,12 @@ class ZwiftRideHid : public Component,
   }
   void set_haptic_timeout_count_sensor(sensor::Sensor *sensor) {
     this->haptic_timeout_count_sensor_ = sensor;
+  }
+  void set_ride_advertising_sensor(binary_sensor::BinarySensor *sensor) {
+    this->ride_advertising_sensor_ = sensor;
+  }
+  void set_advertisement_age_sensor(sensor::Sensor *sensor) {
+    this->advertisement_age_sensor_ = sensor;
   }
   void set_left_lever_sensor(sensor::Sensor *sensor) { this->left_lever_sensor_ = sensor; }
   void set_right_lever_sensor(sensor::Sensor *sensor) { this->right_lever_sensor_ = sensor; }
@@ -137,6 +157,10 @@ class ZwiftRideHid : public Component,
   void update_idle_policy_();
   void ensure_ride_address_();
   bool note_ride_advertisement_();
+  void end_suppression_(const char *reason);
+  void log_advertisement_(const esp32_ble_tracker::ESPBTDevice &device,
+                          const uint8_t *manufacturer_payload,
+                          size_t manufacturer_payload_length);
 
   esp32_ble::ESP32BLE *ble_parent_{nullptr};
   esp32_ble_tracker::ESP32BLETracker *ble_tracker_{nullptr};
@@ -154,6 +178,8 @@ class ZwiftRideHid : public Component,
   bool connect_haptic_{true};
   bool button_haptic_{false};
   bool debug_capture_{false};
+  bool debug_advertisements_{false};
+  bool release_hid_when_idle_{true};
 
   KeyboardReport pending_report_{};
   bool report_pending_{false};
@@ -175,6 +201,9 @@ class ZwiftRideHid : public Component,
   uint32_t invalid_frame_count_{0};
   uint32_t hid_report_count_{0};
   uint32_t published_ride_timeouts_{0};
+  uint32_t last_logged_advertisement_ms_{0};
+  bool advertising_published_{false};
+  bool sleep_confirmed_logged_{false};
   uint32_t last_haptic_ms_{0};
   uint32_t last_diagnostics_ms_{0};
   BridgeState published_state_{BridgeState::STARTING};
@@ -183,6 +212,8 @@ class ZwiftRideHid : public Component,
   binary_sensor::BinarySensor *ride_connected_sensor_{nullptr};
   binary_sensor::BinarySensor *hid_connected_sensor_{nullptr};
   binary_sensor::BinarySensor *ready_sensor_{nullptr};
+  binary_sensor::BinarySensor *ride_advertising_sensor_{nullptr};
+  sensor::Sensor *advertisement_age_sensor_{nullptr};
   text_sensor::TextSensor *state_text_sensor_{nullptr};
   sensor::Sensor *reconnect_count_sensor_{nullptr};
   sensor::Sensor *invalid_frame_count_sensor_{nullptr};
@@ -192,6 +223,18 @@ class ZwiftRideHid : public Component,
   sensor::Sensor *haptic_timeout_count_sensor_{nullptr};
   sensor::Sensor *left_lever_sensor_{nullptr};
   sensor::Sensor *right_lever_sensor_{nullptr};
+};
+
+/** `zwift_ride_hid.reconnect` — cancel idle suppression on demand.
+ *
+ * The sleep/wake re-arm deliberately refuses to reconnect while the
+ * controllers are still advertising, so this is the always-available escape
+ * hatch for a Home Assistant button or any other automation.
+ */
+template<typename... Ts>
+class ReconnectAction : public Action<Ts...>, public Parented<ZwiftRideHid> {
+ public:
+  void play(Ts... x) override { this->parent_->request_reconnect(); }
 };
 
 }  // namespace esphome::zwift_ride_hid

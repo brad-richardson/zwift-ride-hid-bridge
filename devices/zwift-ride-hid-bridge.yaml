@@ -35,7 +35,10 @@ wifi:
 captive_portal:
 
 logger:
-  level: INFO
+  # TEMPORARY: DEBUG is required for the advertisement capture below. Return to
+  # INFO once sleep_confirmation is settled; the Ride advertises continuously,
+  # so this is a steady stream of log lines.
+  level: DEBUG
 
 api:
   encryption:
@@ -72,6 +75,14 @@ binary_sensor:
 button:
   - platform: restart
     name: "Restart ${friendly_name}"
+  # The sleep/wake re-arm deliberately refuses to reconnect while the
+  # controllers are still advertising, so this is the guaranteed escape hatch
+  # when they are awake and the session is wanted back immediately.
+  - platform: template
+    name: Reconnect Ride Controllers
+    entity_category: diagnostic
+    on_press:
+      - zwift_ride_hid.reconnect:
 
 # Local source makes repository and CI builds compile the checked-out code.
 # Replace this block with the immutable Git form in devices/README.md when the
@@ -125,14 +136,25 @@ zwift_ride_hid:
   # them use their own sleep behavior; reconnecting is fast enough that the
   # trade is worth it.
   idle_timeout:
-    disconnect_after: 15min
-    # A just-released controller keeps advertising for a while. Waiting for a
-    # gap this long proves it actually slept, so pressing a button to wake it
-    # is what reconnects the bridge rather than the same still-awake session.
-    sleep_confirmation: 30s
+    # TEMPORARY: shortened from 15min to make the idle path testable in one
+    # sitting. Restore 15min once the timings below are settled.
+    disconnect_after: 5min
+    # A just-released controller keeps advertising, so the bridge waits for a
+    # gap this long before treating the next advertisement as a genuine wake.
+    #
+    # PROVISIONAL. Hardware showed Ride Left advertising continuously for at
+    # least nine minutes after release, so a real power-off is currently the
+    # only way to produce a gap. The right value is a few multiples of the
+    # observed advertising interval, which `debug_advertisements` measures;
+    # too short and a missed advertisement is mistaken for sleep, which
+    # reconnects straight back into an awake controller.
+    sleep_confirmation: 5s
     # Safety net for a controller that never stops advertising: reconnect
     # anyway rather than staying offline until the next reboot.
     max_suppression: 60min
+    # A connected keyboard makes iPadOS hide its on-screen keyboard, so the
+    # bonded host is released for the duration of the idle period.
+    release_hid: true
   # GPIO21 is the XIAO ESP32-S3's active-low orange user LED. The component
   # owns it so its pattern can describe Ride, HID, fault, and OTA state.
   status_led:
@@ -147,6 +169,13 @@ zwift_ride_hid:
       name: Bridge Ready
     state:
       name: Bridge State
+    # False means the controllers have been quiet long enough that the next
+    # advertisement will reconnect. This is the reading that explains why a
+    # button press did or did not bring the session back.
+    ride_advertising:
+      name: Ride Advertising
+    advertisement_age:
+      name: Ride Advertisement Age
     reconnect_count:
       name: Ride Reconnect Count
     invalid_frame_count:
@@ -166,6 +195,11 @@ zwift_ride_hid:
       name: Right Lever Raw
       disabled_by_default: true
   debug_capture: false
+  # TEMPORARY: logs every matching Ride advertisement with its manufacturer
+  # payload, flags, and interval since the previous one. This is the capture
+  # that establishes the real advertising cadence and shows whether a button
+  # press changes the advertisement. Turn off once sleep_confirmation is set.
+  debug_advertisements: true
 
 # Intentionally omitted for the dual-role BLE feasibility test:
 # web_server:

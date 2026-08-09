@@ -86,11 +86,16 @@ awake. Temporarily shortening `disconnect_after` to `1min` and
 `sleep_confirmation` to `5s` makes these checks practical; restore the
 production values and re-install before signing anything off.
 
-- [ ] With Ride ready and no input, confirm the link drops after the configured interval, `Ride Idle Disconnect Count` increments, and the log reads `No Ride input for ... disconnecting so the controllers can sleep`.
-- [ ] Confirm no key is left held and that an already-connected iPad stays paired and attached, with `Zwift Ride KB` no longer advertised.
-- [ ] Immediately after the disconnect, confirm the bridge does **not** reconnect while the controllers are still advertising, even across several minutes.
-- [ ] Let the controllers actually sleep. Measure how long that takes; it determines whether `sleep_confirmation` is generous enough.
-- [ ] Press a control to wake them and confirm the bridge reconnects on that advertisement, `Bridge State` returns to `ready`, and input works without touching the iPad.
+- [x] With Ride ready and no input, confirm the link drops after the configured interval, `Ride Idle Disconnect Count` increments, and the log reads `No Ride input for ... disconnecting so the controllers can sleep`. *(2026-08-09: fired at 15m00s exactly.)*
+- [x] Confirm no key is left held. *(2026-08-09: two extra HID reports, the release and the host resync.)*
+- [x] Immediately after the disconnect, confirm the bridge does **not** reconnect while the controllers are still advertising, even across several minutes. *(2026-08-09: held off for nine minutes through a button press and a short power-cycle.)*
+- [ ] With `release_hid: true`, confirm the iPad regains its on-screen keyboard during suppression, and that it reconnects automatically once the bridge advertises again after a fresh handshake. Measure that reconnect delay; it is the cost of this option.
+- [ ] Capture the advertising cadence with `debug_advertisements: true`: record the typical and worst-case `Ride adv +N ms` gap while the controllers sit idle, then set `sleep_confirmation` to several times the worst case.
+- [ ] Compare an idle advertisement against one taken immediately after a button press. If the manufacturer payload, flags, or interval differ, a press can trigger an instant reconnect and the sleep-gap rule becomes a fallback rather than the primary path.
+- [ ] Determine whether the controllers ever stop advertising on their own, and after how long. If they never do, the sleep/wake path cannot fire in normal use and `max_suppression` should be shortened to become the intended route.
+- [x] Power-cycle Ride Left for longer than `sleep_confirmation` and confirm the bridge reconnects on its first advertisement. *(2026-08-09: `ride_idle_sleeping` → `connecting` → `ready` in 2 s.)*
+- [ ] Confirm a power-cycle shorter than `sleep_confirmation` does not reconnect, and that `Ride Advertising` explains why.
+- [ ] Confirm the `Reconnect Ride Controllers` button restores the session immediately even while the controllers are still advertising.
 - [ ] Hold one control continuously across the timeout and confirm the link is **not** dropped: a held input is use, not idle.
 - [ ] Confirm lever noise below `press_threshold` does not keep the session alive.
 - [ ] Confirm `max_suppression` recovers the link if the controllers somehow never stop advertising, and that the log says so.
