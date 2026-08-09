@@ -969,6 +969,92 @@ void test_silence_latches_slow_for_a_sleeping_controller() {
   EXPECT_FALSE(policy.suppressed());
 }
 
+// --- regressions for failures observed on hardware on 2026-08-09 -----------
+
+void test_regression_sparse_advertisements_do_not_reconnect() {
+  // First failure. The original rule reconnected on the first advertisement
+  // after a silence of sleep_confirmation. The controller does not fall silent
+  // when released; it stretches its interval, and gaps of 2.2, 3.2, 4.8 and
+  // 5.4 s were observed while it was still very much awake. A 5 s threshold
+  // was crossed by that and the bridge reconnected into a live controller.
+  auto policy = idle_policy(300000, 5000, 0);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  uint32_t now = 300000;
+  bool rearmed = false;
+  for (uint32_t gap : {2227U, 3206U, 4770U, 5409U, 6039U, 7348U}) {
+    now += gap;
+    if (policy.on_advertisement(now)) {
+      rearmed = true;
+    }
+    policy.poll(now, false);
+  }
+  EXPECT_FALSE(rearmed);
+  EXPECT_TRUE(policy.suppressed());
+}
+
+void test_regression_640ms_slow_phase_does_not_look_like_a_wake() {
+  // Second failure, and the one that actually reached hardware. The rule was
+  // "three sightings within three seconds means the controller woke". The slow
+  // phase advertises every ~640 ms, so three sightings arrive in 1.9 s and the
+  // test was satisfied continuously. The bridge reconnected nine seconds after
+  // latching, with nobody touching a controller.
+  //
+  // The measured slow rate must remain firmly on the not-a-wake side.
+  auto policy = idle_policy(300000, 30000, 0);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  bool rearmed = false;
+  uint32_t now = feed_advertisements(&policy, 300000 + kSlowIntervalMs,
+                                     kSlowIntervalMs, 300, &rearmed);
+  EXPECT_FALSE(rearmed);
+  EXPECT_TRUE(policy.slowed());
+  EXPECT_TRUE(policy.suppressed());
+
+  // Three sightings inside three seconds, which the old rule accepted.
+  EXPECT_FALSE(policy.on_advertisement(now + kSlowIntervalMs));
+  EXPECT_FALSE(policy.on_advertisement(now + 2 * kSlowIntervalMs));
+  EXPECT_FALSE(policy.on_advertisement(now + 3 * kSlowIntervalMs));
+  EXPECT_TRUE(policy.suppressed());
+}
+
+// Third failure, and the only one that was a language trap rather than a
+// wrong model. ZwiftRideHid derives from both Component and BLEClientNode,
+// which declare an identical loop(). A single override fills both vtable
+// slots, so ESPHome's application loop and BLEClient's node dispatch each
+// invoked the whole body — twice per iteration for the length of every
+// session. This pins the behaviour that makes the guard in loop() necessary,
+// so anyone who removes the guard on the assumption that one override means
+// one call has a failing test to read.
+namespace loop_overlap {
+
+struct DispatcherA {
+  virtual ~DispatcherA() = default;
+  virtual void loop() {}
+};
+
+struct DispatcherB {
+  virtual ~DispatcherB() = default;
+  virtual void loop() {}
+};
+
+struct DerivedFromBoth : DispatcherA, DispatcherB {
+  int calls{0};
+  void loop() override { this->calls++; }
+};
+
+}  // namespace loop_overlap
+
+void test_regression_one_loop_override_serves_two_dispatchers() {
+  loop_overlap::DerivedFromBoth component;
+  static_cast<loop_overlap::DispatcherA *>(&component)->loop();
+  static_cast<loop_overlap::DispatcherB *>(&component)->loop();
+  // Two dispatchers, one override, two invocations of the same body.
+  EXPECT_EQ(2, component.calls);
+}
+
 void test_idle_timings_survive_the_millis_rollover() {
   auto policy = idle_policy(900000, 30000, 3600000);
   const uint32_t before_wrap = UINT32_MAX - 450000U;
@@ -1041,6 +1127,9 @@ int main() {
   run_test("rate estimate ignores channel duplicates", test_rate_estimate_ignores_channel_duplicates);
   run_test("rate hysteresis does not oscillate", test_rate_hysteresis_does_not_oscillate);
   run_test("silence latches slow for a sleeping controller", test_silence_latches_slow_for_a_sleeping_controller);
+  run_test("regression: sparse advertisements do not reconnect", test_regression_sparse_advertisements_do_not_reconnect);
+  run_test("regression: 640 ms slow phase is not a wake", test_regression_640ms_slow_phase_does_not_look_like_a_wake);
+  run_test("regression: one loop override serves two dispatchers", test_regression_one_loop_override_serves_two_dispatchers);
   run_test("idle timings survive the millis rollover", test_idle_timings_survive_the_millis_rollover);
 
   if (failures != 0) {

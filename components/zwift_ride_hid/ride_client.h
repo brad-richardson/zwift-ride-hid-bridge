@@ -40,8 +40,12 @@ class RideClientListener {
 
   virtual void on_ride_ready() {}
   virtual void on_ride_disconnected() {}
-  virtual void on_ride_notification(const uint8_t* data, uint16_t length) {}
-  virtual void on_ride_sync_response(const uint8_t* data, uint16_t length) {}
+  // Parameters are unnamed so the do-nothing defaults stay warning-clean under
+  // the host tests' -Wextra -Werror.
+  virtual void on_ride_notification(const uint8_t* /*data*/,
+                                    uint16_t /*length*/) {}
+  virtual void on_ride_sync_response(const uint8_t* /*data*/,
+                                     uint16_t /*length*/) {}
 };
 
 /** Minimal Zwift Ride GATT protocol helper for ESPHome 2026.7.x.
