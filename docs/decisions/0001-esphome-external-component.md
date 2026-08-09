@@ -1,6 +1,6 @@
 # ADR 0001: ESPHome-owned Bluedroid with a broker-aware HID component
 
-- Status: Accepted provisionally; validate in Milestone 1
+- Status: Accepted; implementation complete, hardware validation outstanding
 - Date: 2026-08-08
 
 ## Context
@@ -15,18 +15,18 @@ A current GPL-3.0 ESPHome BLE keyboard project demonstrates iOS pairing and held
 
 ## Decision
 
-Use ESPHome 2026.7.4 as the initially pinned operational shell and sole Bluedroid owner. The `zwift_ride_hid` external component will:
+Use ESPHome 2026.7.4 as the initially pinned operational shell and sole Bluedroid owner. The `zwift_ride_hid` external component:
 
-- use ESPHome's `esp32_ble_tracker` and `ble_client` for Ride discovery, connection, characteristic access, and reconnection;
-- register HID GAP/GATTS handlers through ESPHome's BLE callback brokers rather than raw global registration;
-- adapt only the keyboard report map, HID attribute tables, encrypted CCCDs, iOS-compatible security behavior, and stateful hold/release logic from the GPL reference;
-- filter GATTS events by HID app/interface and GAP security events by the connected iPad peer;
-- defer NVS/flash and other blocking work out of IDF callbacks;
-- release all HID keys and quiesce bridge activity synchronously when OTA begins or shutdown starts.
+- uses ESPHome's `esp32_ble_tracker` and `ble_client` for Ride discovery, connection, characteristic access, and reconnection;
+- receives HID GAP/GATTS events through ESPHome's BLE callback brokers rather than raw global registration;
+- includes only the keyboard, battery, and device-information GATT services, encrypted CCCDs, iOS-compatible security behavior, and stateful hold/release logic needed by this bridge;
+- filters GATTS events by HID app/interface and GAP security events by the connected iPad peer;
+- defers NVS/flash and other blocking work out of IDF callbacks;
+- releases all HID keys and quiesces bridge activity synchronously when OTA begins or shutdown starts.
 
 Do not load the unmodified keyboard component, NimBLE-Arduino, or T-vK. Leave `bluetooth_proxy`, extra BLE clients, and unrelated generic BLE services disabled in version 1 to conserve connection slots and memory.
 
-Use native ESPHome OTA, API encryption, captive-portal recovery, and safe mode. Device Builder will fetch this repository as an external component at a full immutable commit SHA. Local-path loading is only for development.
+Use native ESPHome OTA, API encryption, captive-portal recovery, and safe mode. Device Builder fetches `https://github.com/brad-richardson/zwift-ride-hid-bridge` as an external component at a full immutable commit SHA. Local-path loading is only for repository development and CI.
 
 ## Consequences
 
@@ -71,9 +71,9 @@ Deferred for version 1. ESPHome's component/code-generation boundary and the Blu
 
 Not selected. An independently written implementation based only on protocol facts and permissive references could potentially be MIT-licensed, but it gives up the lowest-rewrite path. This repository is `GPL-3.0-only` and preserves Zword as its upstream.
 
-## Validation gate
+## Release validation gate
 
-Do not implement the full parser or mapping surface before one firmware simultaneously demonstrates:
+The complete software candidate was intentionally built before hardware became available. Do not describe a commit as known-good or publish a stable release until one firmware simultaneously demonstrates:
 
 1. ESPHome Wi-Fi, encrypted API, safe mode, and OTA;
 2. bonded BLE keyboard input to iPad Notes;

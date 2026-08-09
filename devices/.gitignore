@@ -1,0 +1,3 @@
+# ESPHome build state and local credentials for this reference device.
+/.esphome/
+/secrets.yaml

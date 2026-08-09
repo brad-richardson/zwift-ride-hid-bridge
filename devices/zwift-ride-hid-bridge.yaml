@@ -8,7 +8,7 @@ esphome:
   min_version: 2026.7.4
   project:
     name: bradrichardson.zwift_ride_hid_bridge
-    version: 0.0.0
+    version: 0.1.0-dev
 
 esp32:
   # Specific XIAO definition. If an older Device Builder rejects this ID,
@@ -45,12 +45,7 @@ ota:
   - platform: esphome
     password: !secret ota_password
 
-# GPIO21 is the XIAO's active-low orange user LED. The bridge component will
-# replace this generic status behavior with connection-state patterns later.
-status_led:
-  pin:
-    number: GPIO21
-    inverted: true
+safe_mode:
 
 text_sensor:
   - platform: version
@@ -78,8 +73,9 @@ button:
   - platform: restart
     name: "Restart ${friendly_name}"
 
-# Local development source. Replace this block with the immutable Git form in
-# devices/README.md when the repository has a remote and reviewed commit SHA.
+# Local source makes repository and CI builds compile the checked-out code.
+# Replace this block with the immutable Git form in devices/README.md when the
+# configuration lives in ESPHome Device Builder.
 external_components:
   - source:
       type: local
@@ -106,7 +102,40 @@ zwift_ride_hid:
   analog_levers:
     press_threshold: 35
     release_threshold: 20
-    expose_raw: false
+    # Useful during the hardware-validation phase. Disable after calibrating
+    # the two lever signs if raw values are not needed in Home Assistant.
+    expose_raw: true
+  haptics:
+    connect_confirmation: true
+    # Per-button vibration can be distracting and adds BLE writes, so it is
+    # opt-in even though the bridge supports it.
+    button_feedback: false
+  # GPIO21 is the XIAO ESP32-S3's active-low orange user LED. The component
+  # owns it so its pattern can describe Ride, HID, fault, and OTA state.
+  status_led:
+    number: GPIO21
+    inverted: true
+  diagnostics:
+    ride_connected:
+      name: Ride Controller Connected
+    hid_connected:
+      name: HID Host Ready
+    ready:
+      name: Bridge Ready
+    state:
+      name: Bridge State
+    reconnect_count:
+      name: Ride Reconnect Count
+    invalid_frame_count:
+      name: Invalid Ride Frame Count
+    hid_report_count:
+      name: HID Report Count
+    left_lever:
+      name: Left Lever Raw
+      disabled_by_default: true
+    right_lever:
+      name: Right Lever Raw
+      disabled_by_default: true
   debug_capture: false
 
 # Intentionally omitted for the dual-role BLE feasibility test:

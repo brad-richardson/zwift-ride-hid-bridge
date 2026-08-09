@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-core:
+    name: Host core tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure C++ tests
+        run: cmake -S tests -B build/host -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build C++ tests
+        run: cmake --build build/host --parallel 2
+
+      - name: Run C++ tests
+        run: ctest --test-dir build/host --output-on-failure
+
+      - name: Guard ESPHome's Bluetooth ownership
+        shell: bash
+        run: |
+          if rg -n 'esp_(ble_gap|ble_gatts)_register_callback|esp_bluedroid_init|esp_bt_controller_init' components/zwift_ride_hid; then
+            echo 'The external component must use ESPHome BLE brokers and must not initialize or replace the global Bluetooth stack.' >&2
+            exit 1
+          fi
+
+  esphome-firmware:
+    name: ESPHome 2026.7.4 firmware
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up locked uv version
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.3'
+          enable-cache: true
+
+      - name: Install locked tooling
+        run: uv sync --locked
+
+      - name: Create non-secret CI fixture
+        run: install -m 600 devices/secrets.example.yaml devices/secrets.yaml
+
+      - name: Validate reference configuration
+        run: uv run --locked esphome config devices/zwift-ride-hid-bridge.yaml
+
+      - name: Compile XIAO ESP32-S3 firmware
+        run: uv run --locked esphome compile devices/zwift-ride-hid-bridge.yaml

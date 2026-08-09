@@ -2,18 +2,48 @@
 
 from esphome import codegen as cg
 from esphome import config_validation as cv
-from esphome.components import ble_client
-from esphome.const import CONF_ID
+from esphome import pins
+from esphome.components import (
+    binary_sensor,
+    ble_client,
+    esp32_ble,
+    ota,
+    sensor,
+    text_sensor,
+)
+from esphome.components.esp32_ble import BTLoggers
+from esphome.const import (
+    CONF_ID,
+    DEVICE_CLASS_CONNECTIVITY,
+    ENTITY_CATEGORY_DIAGNOSTIC,
+    ICON_COUNTER,
+    STATE_CLASS_MEASUREMENT,
+)
 
-DEPENDENCIES = ["esp32", "ble_client"]
+DEPENDENCIES = ["esp32", "ble_client", "esp32_ble"]
+AUTO_LOAD = ["binary_sensor", "sensor", "text_sensor"]
 
 CONF_ANALOG_LEVERS = "analog_levers"
+CONF_BUTTON_FEEDBACK = "button_feedback"
+CONF_CONNECT_CONFIRMATION = "connect_confirmation"
 CONF_DEBUG_CAPTURE = "debug_capture"
+CONF_DIAGNOSTICS = "diagnostics"
 CONF_EXPOSE_RAW = "expose_raw"
+CONF_HAPTICS = "haptics"
+CONF_HID_CONNECTED = "hid_connected"
 CONF_HID_NAME = "hid_name"
+CONF_HID_REPORT_COUNT = "hid_report_count"
+CONF_INVALID_FRAME_COUNT = "invalid_frame_count"
+CONF_LEFT_LEVER = "left_lever"
 CONF_PRESS_THRESHOLD = "press_threshold"
 CONF_PROFILE = "profile"
+CONF_READY = "ready"
+CONF_RECONNECT_COUNT = "reconnect_count"
 CONF_RELEASE_THRESHOLD = "release_threshold"
+CONF_RIDE_CONNECTED = "ride_connected"
+CONF_RIGHT_LEVER = "right_lever"
+CONF_STATE = "state"
+CONF_STATUS_LED = "status_led"
 
 PROFILES = ("delta_emulator", "diagnostic_all_inputs")
 
@@ -30,6 +60,59 @@ ANALOG_LEVER_SCHEMA = cv.Schema(
     }
 )
 
+HAPTICS_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_CONNECT_CONFIRMATION, default=True): cv.boolean,
+        cv.Optional(CONF_BUTTON_FEEDBACK, default=False): cv.boolean,
+    }
+)
+
+DIAGNOSTICS_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_RIDE_CONNECTED): binary_sensor.binary_sensor_schema(
+            device_class=DEVICE_CLASS_CONNECTIVITY,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_HID_CONNECTED): binary_sensor.binary_sensor_schema(
+            device_class=DEVICE_CLASS_CONNECTIVITY,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_READY): binary_sensor.binary_sensor_schema(
+            device_class=DEVICE_CLASS_CONNECTIVITY,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_STATE): text_sensor.text_sensor_schema(
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_RECONNECT_COUNT): sensor.sensor_schema(
+            icon=ICON_COUNTER,
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_INVALID_FRAME_COUNT): sensor.sensor_schema(
+            icon=ICON_COUNTER,
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_HID_REPORT_COUNT): sensor.sensor_schema(
+            icon=ICON_COUNTER,
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_LEFT_LEVER): sensor.sensor_schema(
+            accuracy_decimals=0,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional(CONF_RIGHT_LEVER): sensor.sensor_schema(
+            accuracy_decimals=0,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+    }
+)
+
 
 def _validate_thresholds(config):
     analog = config[CONF_ANALOG_LEVERS]
@@ -38,33 +121,88 @@ def _validate_thresholds(config):
     return config
 
 
+def _validate_hid_name(value):
+    value = cv.string_strict(value)
+    byte_length = len(value.encode("utf-8"))
+    if not 1 <= byte_length <= 20:
+        raise cv.Invalid("hid_name must contain 1..20 UTF-8 bytes")
+    return value
+
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(ZwiftRideHid),
-            cv.Optional(CONF_HID_NAME, default="Zwift Ride KB"): cv.string_strict,
+            cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
+            cv.Optional(CONF_HID_NAME, default="Zwift Ride KB"): _validate_hid_name,
             cv.Optional(CONF_PROFILE, default="delta_emulator"): cv.one_of(
                 *PROFILES, lower=True
             ),
             cv.Optional(CONF_ANALOG_LEVERS, default={}): ANALOG_LEVER_SCHEMA,
+            cv.Optional(CONF_HAPTICS, default={}): HAPTICS_SCHEMA,
+            cv.Optional(CONF_STATUS_LED): pins.gpio_output_pin_schema,
+            cv.Optional(CONF_DIAGNOSTICS, default={}): DIAGNOSTICS_SCHEMA,
             cv.Optional(CONF_DEBUG_CAPTURE, default=False): cv.boolean,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
     .extend(ble_client.BLE_CLIENT_SCHEMA),
     _validate_thresholds,
+    cv.only_with_framework("esp-idf"),
 )
+
+# One connection is Ride Left (reserved by ble_client) and one is the HID host.
+FINAL_VALIDATE_SCHEMA = esp32_ble.consume_connection_slots(1, "zwift_ride_hid")
 
 
 async def to_code(config):
+    esp32_ble.register_bt_logger(BTLoggers.GATT, BTLoggers.SMP, BTLoggers.HID)
+    cg.add_define("USE_ESP32_BLE_SERVER")
+    cg.add_define("USE_ESP32_BLE_ADVERTISING")
+    cg.add_define("USE_ESP32_BLE_UUID")
+    ota.request_ota_state_listeners()
+
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
 
+    # BLEClientNode already receives GAP events via its BLEClient parent. Registering
+    # it again with the process-wide broker would deliver every GAP event twice.
+    parent = await cg.get_variable(config[esp32_ble.CONF_BLE_ID])
+    esp32_ble.register_gatts_event_handler(parent, var)
+    esp32_ble.register_ble_status_event_handler(parent, var)
+    cg.add(var.set_ble_parent(parent))
+
     analog = config[CONF_ANALOG_LEVERS]
+    haptics = config[CONF_HAPTICS]
+    cg.add(parent.set_name(config[CONF_HID_NAME]))
+    cg.add(parent.advertising_set_appearance(0x03C1))  # HID keyboard
     cg.add(var.set_hid_name(config[CONF_HID_NAME]))
     cg.add(var.set_profile(config[CONF_PROFILE]))
     cg.add(var.set_press_threshold(analog[CONF_PRESS_THRESHOLD]))
     cg.add(var.set_release_threshold(analog[CONF_RELEASE_THRESHOLD]))
     cg.add(var.set_expose_raw(analog[CONF_EXPOSE_RAW]))
+    cg.add(var.set_connect_haptic(haptics[CONF_CONNECT_CONFIRMATION]))
+    cg.add(var.set_button_haptic(haptics[CONF_BUTTON_FEEDBACK]))
     cg.add(var.set_debug_capture(config[CONF_DEBUG_CAPTURE]))
+
+    if CONF_STATUS_LED in config:
+        pin = await cg.gpio_pin_expression(config[CONF_STATUS_LED])
+        cg.add(var.set_status_led(pin))
+
+    diagnostics = config[CONF_DIAGNOSTICS]
+    diagnostic_setters = {
+        CONF_RIDE_CONNECTED: (binary_sensor.new_binary_sensor, "set_ride_connected_sensor"),
+        CONF_HID_CONNECTED: (binary_sensor.new_binary_sensor, "set_hid_connected_sensor"),
+        CONF_READY: (binary_sensor.new_binary_sensor, "set_ready_sensor"),
+        CONF_STATE: (text_sensor.new_text_sensor, "set_state_text_sensor"),
+        CONF_RECONNECT_COUNT: (sensor.new_sensor, "set_reconnect_count_sensor"),
+        CONF_INVALID_FRAME_COUNT: (sensor.new_sensor, "set_invalid_frame_count_sensor"),
+        CONF_HID_REPORT_COUNT: (sensor.new_sensor, "set_hid_report_count_sensor"),
+        CONF_LEFT_LEVER: (sensor.new_sensor, "set_left_lever_sensor"),
+        CONF_RIGHT_LEVER: (sensor.new_sensor, "set_right_lever_sensor"),
+    }
+    for key, (factory, setter) in diagnostic_setters.items():
+        if key in diagnostics:
+            entity = await factory(diagnostics[key])
+            cg.add(getattr(var, setter)(entity))

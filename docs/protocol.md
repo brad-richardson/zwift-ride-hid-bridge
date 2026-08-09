@@ -1,6 +1,6 @@
 # Zwift Ride input protocol
 
-This document is the implementation inventory for the bridge. It combines the downloaded fork plan with the current upstream sketch and published protocol notes. Captures from the actual target controllers remain the final authority.
+This document is the implemented protocol contract for the bridge. It combines the downloaded fork plan with the reviewed upstream sketch and published protocol notes. The bounded host-tested decoder follows this contract; captures from the actual target controllers remain the final authority.
 
 ## Topology
 
@@ -21,6 +21,8 @@ The current handshake writes ASCII `RideOn` to the sync-RX characteristic, then 
 ## Input packet
 
 Input status messages begin with command byte `0x23`, followed by a protobuf payload. Parse the protobuf fields rather than assuming that `pData[2]`, `pData[3]`, and `pData[4]` will always occupy fixed offsets.
+
+The implementation accepts complete notifications up to 128 bytes and performs no heap allocation. It decodes into a temporary value and replaces live state only after the entire packet passes validation, including the required button map.
 
 - field 1: inverse-logic uint32 button bitmap (`0` means pressed)
 - analog records have appeared in two wire-compatible semantic layouts and the parser must accept both:

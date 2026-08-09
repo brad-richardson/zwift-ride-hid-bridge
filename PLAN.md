@@ -1,5 +1,7 @@
 # Implementation plan
 
+> **Implementation status:** the version-1 software surface described below is present, with host tests and a pinned ESPHome compile check in CI. It has not been exercised on a XIAO ESP32-S3, real Ride controllers, or an iPad. Milestone acceptance lists are therefore hardware validation gates, not claims of completion.
+
 ## Recommendation
 
 Build this as one pinned ESPHome external component for the ESP32-S3/ESP-IDF framework. ESPHome owns the operational shell and the single Bluedroid lifecycle—Wi-Fi, Device Builder, secrets, logging, encrypted API, safe mode, OTA, scanning, and the Ride GATT client. `zwift_ride_hid` adds the missing HID keyboard server through ESPHome's BLE event brokers:
@@ -7,9 +9,9 @@ Build this as one pinned ESPHome external component for the ESP32-S3/ESP-IDF fra
 - GATT client to one Zwift Ride **left** controller
 - BLE HID keyboard peripheral to the iPad
 
-This is the safest ESPHome-centered route. A working GPL-3.0 ESPHome BLE keyboard component demonstrates Bluedroid HID, iOS pairing, and held keys, but an audit found that it cannot be loaded unchanged beside ESPHome's built-in BLE client: it reinitializes the controller/host and replaces the global GAP/GATTS callbacks. Selectively port its HID attribute tables, encrypted CCCDs, report map, and hold/release behavior into `zwift_ride_hid`; remove its stack/NVS initialization, callback registration, web keyboard, mouse, and multi-host code.
+This is the selected ESPHome-centered route. A working GPL-3.0 ESPHome BLE keyboard component demonstrates Bluedroid HID, iOS pairing, and held keys, but an audit found that it cannot be loaded unchanged beside ESPHome's built-in BLE client: it reinitializes the controller/host and replaces the global GAP/GATTS callbacks. The bridge therefore contains only the broker-aware HID server behavior it needs and leaves stack/NVS initialization, process-global callback ownership, web keyboard, mouse, and multi-host behavior out.
 
-Use ESPHome's `esp32_ble_tracker` and `ble_client` for Ride Left. Register the HID GAP/GATTS handlers with ESPHome's callback broker, filter GATTS events by application/interface and security events by the iPad peer, and reserve one server connection. Do not add NimBLE-Arduino, T-vK, the unmodified keyboard component, `bluetooth_proxy`, or unrelated generic BLE services. Milestone 1 remains a hard dual-role proof before the full parser is ported.
+Use ESPHome's `esp32_ble_tracker` and `ble_client` for Ride Left. Register the HID handlers with ESPHome's callback broker, filter GATTS events by application/interface and security events by the iPad peer, and reserve one server connection. Do not add NimBLE-Arduino, T-vK, the unmodified keyboard component, `bluetooth_proxy`, or unrelated generic BLE services. The dual-role proof remains the hard hardware gate before the implementation is called usable.
 
 ## Scope
 
@@ -36,7 +38,7 @@ Use ESPHome's `esp32_ble_tracker` and `ble_client` for Ride Left. Register the H
 - Multiple Ride pairs.
 - Automatic controller firmware compatibility beyond current `FC82`, unless a fixture proves the older service remains worth supporting.
 
-## Planned repository shape
+## Repository shape
 
 ```text
 zwift-ride-hid-bridge/
@@ -49,20 +51,18 @@ zwift-ride-hid-bridge/
 ├── components/
 │   └── zwift_ride_hid/
 │       ├── __init__.py            # YAML schema and ESPHome code generation
-│       ├── bridge.h/.cpp          # lifecycle, mapping aggregation, safety
+│       ├── zwift_ride_hid.h/.cpp  # lifecycle, mapping aggregation, safety
 │       ├── ride_client.h/.cpp     # ESPHome BLE-client handshake/notify/haptics
 │       ├── ride_protocol.h/.cpp   # bounded protobuf/varint parser
+│       ├── input_state.h/.cpp     # semantic buttons and lever hysteresis
+│       ├── keymap.h/.cpp          # canned mappings and whole HID reports
 │       └── hid_keyboard.h/.cpp    # broker-aware Bluedroid HID service/reports
 ├── devices/
 │   ├── zwift-ride-hid-bridge.yaml # reference device config
 │   └── secrets.example.yaml
 ├── tests/
-│   ├── fixtures/                  # sanitized notification frames
-│   ├── protocol_test.cpp
-│   ├── edge_test.cpp
-│   └── mapping_test.cpp
-├── tools/
-│   └── decode_capture.py          # offline annotated capture decoder
+│   ├── CMakeLists.txt
+│   └── host_core_tests.cpp        # protocol/state/mapping host coverage
 └── docs/
     ├── protocol.md
     ├── delta-mapping.md
@@ -81,7 +81,7 @@ Development uses a local component path from the checked-out repository. An inst
 external_components:
   - source:
       type: git
-      url: https://github.com/OWNER/zwift-ride-hid-bridge.git
+      url: https://github.com/brad-richardson/zwift-ride-hid-bridge.git
       ref: 0123456789abcdef0123456789abcdef01234567
       path: components
     components: [zwift_ride_hid]
@@ -121,7 +121,7 @@ Use a standard keyboard report first and explicitly detect/report six-key rollov
 
 ## Configuration surface
 
-The proposed external-component schema should be small and validated by ESPHome:
+The external-component schema is deliberately small and validated by ESPHome:
 
 ```yaml
 ble_client:
@@ -136,16 +136,37 @@ zwift_ride_hid:
     press_threshold: 35
     release_threshold: 20
     expose_raw: false
+  haptics:
+    connect_confirmation: true
+    button_feedback: false
+  status_led:
+    number: GPIO21
+    inverted: true
+  diagnostics:
+    ride_connected:
+      name: Ride Controller Connected
+    hid_connected:
+      name: HID Host Ready
+    ready:
+      name: Bridge Ready
+    state:
+      name: Bridge State
+    reconnect_count:
+      name: Ride Reconnect Count
+    invalid_frame_count:
+      name: Invalid Ride Frame Count
+    hid_report_count:
+      name: HID Report Count
   debug_capture: false
 ```
 
-Advanced `mappings:` overrides can follow after the canned profile works. Each known physical input must receive a stable semantic ID, even when its HID mapping is disabled.
+Advanced `mappings:` overrides remain deferred until a canned profile works on hardware. Each known physical input already has a stable semantic ID, even if a future profile disables its HID mapping.
 
 ## Milestones and gates
 
-### 0. Bootstrap and hardware facts
+### 0. Bootstrap and hardware facts — software complete, hardware pending
 
-Pin ESPHome 2026.7.4 (or move the repo and home server together to a reviewed newer patch) and keep `secrets.example.yaml` credential-free. Target the Seeed Studio XIAO ESP32-S3 with 8 MB flash, 8 MB octal PSRAM, and its active-low user LED on GPIO21. Prefer the specific `seeed_xiao_esp32s3` board definition; retain the user's proven `esp32-s3-devkitc-1` definition as the documented fallback if their Device Builder version rejects the specific ID. The compile-only external-component scaffold is validated locally; validate immutable-Git loading after a remote and first reviewed SHA exist.
+Pin ESPHome 2026.7.4 (or move the repository and home server together to a reviewed newer patch) and keep `secrets.example.yaml` credential-free. Target the Seeed Studio XIAO ESP32-S3 with 8 MB flash, 8 MB octal PSRAM, and its active-low user LED on GPIO21. Prefer the specific `seeed_xiao_esp32s3` board definition; retain the user's proven `esp32-s3-devkitc-1` definition as the documented fallback if their Device Builder version rejects the specific ID. The repository is public and the production contract now points to its real URL; the user must select a reviewed post-implementation SHA after CI passes.
 
 Acceptance:
 
@@ -153,11 +174,11 @@ Acceptance:
 - first USB flash boots, joins Wi-Fi, appears in Device Builder, and accepts a no-op OTA update;
 - no credentials or device addresses enter git.
 
-Completed local baseline on ESPHome 2026.7.4: configuration valid, full ESP32-S3 compile successful, approximately 41% internal RAM and 32% OTA-partition flash used.
+The feature-complete candidate compiles on ESPHome 2026.7.4 / ESP-IDF 5.5.5. Its 1,277,751-byte image uses 140,355 bytes of DIRAM (41.1%) and 32.5% of the 3,932,160-byte OTA application partition, leaving 68% of that partition free.
 
-### 1. Dual-role feasibility spike (hard gate)
+### 1. Dual-role feasibility (implemented, hard hardware gate)
 
-Adapt only the necessary HID keyboard/report pieces from the GPL-compatible ESPHome keyboard reference, pinned at `21274b03dd424927e35cd67bbb7c9af848daaef5`, and record every adapted file/section in `NOTICE.md`. Let ESPHome initialize Bluedroid, use `ble_client` for Ride Left, and register the HID handlers through ESPHome's GAP/GATTS brokers. Filter events by HID app/interface and iPad peer. Use Espressif's official HID example as a second behavioral reference. In the same build, connect to manufacturer device ID 8, write `RideOn`, and log one `0x23` notification.
+The component implements the Ride client and a minimal HID server while letting ESPHome initialize Bluedroid and own its event brokers. Source provenance is recorded in `NOTICE.md`. The remaining gate is to prove, in the same running image, an iPad HID link plus a Ride-left connection, successful `RideOn`, and a real `0x23` notification.
 
 Acceptance:
 
@@ -173,9 +194,9 @@ Decision gate:
 - **Fail due to a correctable HID broker limitation:** add the smallest broker/lifecycle adaptation inside the external component; never replace ESPHome's global callbacks.
 - **Fail due to an irreducible ESPHome lifecycle/resource conflict:** switch to standalone ESP-IDF/Bluedroid with a separately secured OTA path. Preserve the parser, tests, and repository layout. Do not introduce a second BLE stack merely to save the ESPHome shell.
 
-### 2. Protocol and complete input model
+### 2. Protocol and complete input model — implemented and host-tested
 
-Implement a small bounded protobuf decoder for message `0x23`:
+The bounded protobuf decoder for message `0x23`:
 
 - parse field 1 as a uint32 varint button map;
 - invert only the known button mask;
@@ -192,9 +213,9 @@ Acceptance:
 - edge tests prove independent press/release transitions;
 - controller disconnect always produces an empty HID report.
 
-### 3. Application profiles and every-input mapping
+### 3. Application profiles and every-input mapping — implemented and host-tested
 
-Ship two profiles:
+Two profiles are present:
 
 1. `delta_emulator`: one stable keyboard vocabulary for Delta's NES, SNES, GB/GBC, GBA, DS, and Genesis cores. Every remaining Ride control still receives a unique spare key so it can be bound per system.
 2. `diagnostic_all_inputs`: every discrete input and every lever direction emits a unique key, making mapping verification easy in Notes or a keyboard tester.
@@ -229,9 +250,9 @@ Acceptance:
 - pressing two controls mapped to the same HID key and releasing one does not release the other;
 - lever jitter around a threshold does not chatter.
 
-### 4. Reconnect, OTA, and recovery
+### 4. Reconnect, OTA, and recovery — implemented, hardware pending
 
-Implement an explicit state machine:
+The implementation exposes an explicit lifecycle equivalent to:
 
 ```text
 SCANNING → CONNECTING → DISCOVERING → HANDSHAKING → READY
@@ -243,7 +264,7 @@ On any transition out of `READY`, send an empty HID report before cleanup. Re-sc
 
 OTA lifecycle:
 
-- on begin: empty HID report, stop new input processing, disconnect Ride, stop scanning/advertising if required;
+- on begin: empty HID report, stop new input processing, disconnect the HID host and Ride, and stop HID advertising;
 - update over Wi-Fi using ESPHome native OTA and a new, unique `ota_password` secret;
 - reboot into the new image, with ESPHome safe mode/rollback left enabled;
 - keep USB serial recovery documented because OTA cannot repair every partition/bootloader failure.
@@ -255,15 +276,16 @@ Acceptance:
 - OTA during an idle paired session succeeds and leaves no held key;
 - an intentionally bad application boot reaches ESPHome recovery behavior.
 
-### 5. Status and endurance
+### 5. Status and endurance — implemented diagnostics, hardware pending
 
-Add single-LED blink patterns and low-rate diagnostics. The XIAO has one active-low orange user LED rather than an addressable RGB LED:
+The reference configuration assigns the XIAO's one active-low orange user LED to the bridge and enables low-rate diagnostics. Validate the intended patterns on hardware:
 
-- slow pulse: scanning;
+- one slow blink: starting, scanning, or HID-only;
 - short-short pause: Ride ready, no HID host;
 - solid: Ride and HID host ready;
-- fast pulse: OTA;
-- repeating error count: recoverable fault.
+- fast blink: OTA;
+- repeating triple blink: recoverable fault;
+- off: stopped.
 
 Run the full 45-minute FireRed ride, including one controller sleep/wake. Also run a 4-hour synthetic reconnect/chord test while tracking minimum free heap, largest free block, dropped BLE events, reconnect count, and unexpected release-all count.
 
@@ -284,8 +306,8 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 - pin ESPHome rather than building against an unbounded latest release;
 - validate the example YAML with dummy secrets;
 - compile the ESP32-S3 image;
-- run host tests and formatting checks;
-- store firmware size/IRAM/DRAM figures as artifacts or job summaries.
+- run the allocation-free core's CMake/CTest suite with warnings as errors;
+- fail if the external component introduces direct Bluedroid initialization or raw process-global GAP/GATTS registration.
 
 ### Hardware matrix
 
@@ -302,7 +324,7 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 
 | Risk | Mitigation |
 |---|---|
-| ESPHome has no stock BLE HID keyboard | Reuse only the necessary GPL ESPHome HID implementation pieces; keep Milestone 1 as a hard gate. |
+| ESPHome has no stock BLE HID keyboard | Keep the in-repository HID server minimal and broker-aware; retain the simultaneous Ride+iPad hardware test as a hard gate. |
 | HID code initializes BLE or replaces global callbacks | ESPHome remains sole stack owner; review/CI reject `esp_bt_controller_init`, `esp_bluedroid_init`, and raw callback registration in the component. |
 | Wi-Fi + central BLE + peripheral BLE pressure RAM/radio | Minimal ESPHome config, no web server by default, fixed buffers, heap telemetry, endurance gate. |
 | Analog lever meaning/sign varies | Capture raw signed values, calibrate each side, use YAML thresholds and hysteresis. |
@@ -311,12 +333,13 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 | iPad bonding changes during firmware updates | Preserve NVS/partition layout; test OTA reboot and re-pair recovery before endurance work. |
 | Upstream GPL code provenance | GPL-3.0-only repo, prominent Zword attribution, and exact SHA/file records before importing or adapting code. |
 
-## Remaining inputs before hardware flashing
+## Remaining inputs before hardware validation
 
 These do not block repository implementation, but they do block the first device test:
 
-- ESPHome server patch version;
+- confirmation that Device Builder can use the repository pin, ESPHome `2026.7.4`;
 - the Ride Left MAC address (stock `ble_client` requires it; a device-ID-aware discovery helper is deferred);
+- confirmation that the documented upper/middle controls match the printed LS1/LS2 and RS1/RS2 numbering;
 - which sign of each analog lever should be considered steering vs braking on the physical bike.
 
 Known hardware/configuration facts:
