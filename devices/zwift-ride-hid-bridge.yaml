@@ -1,0 +1,114 @@
+substitutions:
+  name: zwift-ride-hid-bridge
+  friendly_name: Zwift Ride HID Bridge
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2026.7.4
+  project:
+    name: bradrichardson.zwift_ride_hid_bridge
+    version: 0.0.0
+
+esp32:
+  # Specific XIAO definition. If an older Device Builder rejects this ID,
+  # temporarily use the already-proven esp32-s3-devkitc-1 definition.
+  board: seeed_xiao_esp32s3
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+
+# The XIAO ESP32-S3 has 8 MB octal PSRAM. BLE's timing-sensitive buffers
+# should still remain bounded and must not assume all allocations use PSRAM.
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: !secret ssid
+  password: !secret password
+  output_power: 8.5db
+  ap:
+    ssid: "${friendly_name} ESP"
+    password: !secret fallback_password
+
+captive_portal:
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# GPIO21 is the XIAO's active-low orange user LED. The bridge component will
+# replace this generic status behavior with connection-state patterns later.
+status_led:
+  pin:
+    number: GPIO21
+    inverted: true
+
+text_sensor:
+  - platform: version
+    name: ESPHome Version
+  - platform: wifi_info
+    ip_address:
+      name: IP
+    ssid:
+      name: SSID
+    bssid:
+      name: BSSID
+
+sensor:
+  - platform: uptime
+    name: Uptime
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 120s
+
+binary_sensor:
+  - platform: status
+    name: Status
+
+button:
+  - platform: restart
+    name: "Restart ${friendly_name}"
+
+# Local development source. Replace this block with the immutable Git form in
+# devices/README.md when the repository has a remote and reviewed commit SHA.
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [zwift_ride_hid]
+
+# ESPHome owns scanning, the GATT client link, and Bluedroid lifecycle.
+esp32_ble:
+  max_connections: 3
+
+esp32_ble_tracker:
+  scan_parameters:
+    continuous: true
+
+ble_client:
+  - mac_address: !secret ride_left_mac
+    id: ride_left
+    auto_connect: true
+
+zwift_ride_hid:
+  ble_client_id: ride_left
+  hid_name: Zwift Ride KB
+  profile: delta_emulator
+  analog_levers:
+    press_threshold: 35
+    release_threshold: 20
+    expose_raw: false
+  debug_capture: false
+
+# Intentionally omitted for the dual-role BLE feasibility test:
+# web_server:
+#   port: 80
