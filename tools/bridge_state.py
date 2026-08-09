@@ -37,6 +37,10 @@ DIAGNOSTIC_ENTITIES = {
     "HID Host Ready",
     "Bridge Ready",
     "Bridge State",
+    # False means the controllers have gone quiet long enough that the next
+    # advertisement will reconnect, which is what explains a refused wake.
+    "Ride Advertising",
+    "Ride Advertisement Age",
     "Ride Reconnect Count",
     "Ride Idle Disconnect Count",
     "Ride Setup Timeout Count",
