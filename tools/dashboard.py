@@ -35,6 +35,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 from websockets.asyncio.client import connect
@@ -72,12 +73,45 @@ def substitute_once(content: str, old: str, new: str, label: str) -> str:
     return content.replace(old, new)
 
 
-def render(sha: str) -> str:
+def require_pushed_commit(sha: str) -> None:
+    """Reject a SHA that is not a real, pushed commit.
+
+    A well-formed but wrong SHA validates and saves happily, then fails much
+    later in Device Builder's compile with an obscure fetch error — after the
+    dashboard configuration has already been overwritten. Checking here keeps a
+    typo or a half-remembered SHA from ever reaching the dashboard.
+    """
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise SystemExit(
             "the deployed source must be a full 40-character commit SHA, "
             "never a branch or a movable tag"
         )
+
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        cwd=REPOSITORY,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(f"{sha} is not a commit in this repository")
+
+    # Device Builder fetches from the remote, so a local-only commit would
+    # leave the device pinned to something nobody else can build.
+    remotes = subprocess.run(
+        ["git", "branch", "--remotes", "--contains", sha],
+        capture_output=True,
+        text=True,
+        cwd=REPOSITORY,
+    )
+    if remotes.returncode != 0 or not remotes.stdout.strip():
+        raise SystemExit(
+            f"{sha} has not been pushed; Device Builder could not fetch it"
+        )
+
+
+def render(sha: str) -> str:
+    require_pushed_commit(sha)
 
     content = REFERENCE_YAML.read_text()
     content = substitute_once(
