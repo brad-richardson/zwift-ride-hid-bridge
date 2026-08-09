@@ -101,6 +101,10 @@ zwift_ride_hid:
     disconnect_after: 15min
     sleep_confirmation: 30s
     max_suppression: 60min
+    release_hid: true
+    slow_gap: 5s
+    wake_burst_count: 3
+    wake_burst_window: 3s
   status_led:
     number: GPIO21
     inverted: true
@@ -113,6 +117,10 @@ zwift_ride_hid:
       name: Bridge Ready
     state:
       name: Bridge State
+    ride_advertising:
+      name: Ride Advertising
+    advertisement_age:
+      name: Ride Advertisement Age
     reconnect_count:
       name: Ride Reconnect Count
     invalid_frame_count:
@@ -132,6 +140,7 @@ zwift_ride_hid:
       name: Right Lever Raw
       disabled_by_default: true
   debug_capture: false
+  debug_advertisements: false
 ```
 
 The press threshold must be greater than the release threshold. Raw lever entities are disabled by default in Home Assistant but enabled at the component while the physical signs are being established. After calibration, set `expose_raw: false` and remove the two raw sensors if they are not useful.
@@ -143,25 +152,32 @@ The press threshold must be greater than the release threshold. Raw lever entiti
 Holding the Ride GATT link keeps the controllers awake, so an unattended bridge would flatten their batteries. `idle_timeout` releases the link instead:
 
 - `disconnect_after` (default `15min`) is the quiet period. Any press, release, or lever threshold crossing restarts it, and a control that is simply held counts as continuous use. `0s` disables the feature and restores the original always-connected behavior.
-- `sleep_confirmation` (default `30s`) is how long the controller advertisement must be absent before a later advertisement is treated as a genuine wake. A controller that was just released keeps advertising for a while; reconnecting to that would defeat the point. The practical consequence is that returning before the controllers sleep means waiting for them to sleep, or power-cycling one of them.
+- `sleep_confirmation` (default `30s`) sets only when `Ride Advertising` reads false. It no longer decides reconnection; see below.
 - `max_suppression` (default `60min`) is the safety net. If the controllers never stop advertising, the bridge reconnects anyway rather than staying offline until a reboot. `0s` removes the cap and should only be used once the controllers' sleep behavior is well understood.
 - `release_hid` (default `true`) also disconnects the bonded HID host for the duration of the idle period. A connected keyboard makes iPadOS hide its on-screen keyboard, so leaving the link up costs the iPad its software keyboard for hours. Set it to `false` to keep the host attached for the fastest possible resume.
 
-### Choosing `sleep_confirmation`
+### How the bridge decides the controllers are back
 
-This is the value most likely to need tuning, and the wrong number fails in both directions. Too long and a genuine power-cycle does not reconnect. Too short and a *missed* advertisement is mistaken for sleep, so the bridge reconnects straight back into an awake controller and the whole feature achieves nothing.
+The first design waited for a silence of `sleep_confirmation` and reconnected on the next advertisement. Hardware showed why that cannot work. Ride Left does not stop advertising when released — it steps down through two regimes on its way to sleep:
 
-The scanner does not see every advertisement — at the reference 30 ms window every 320 ms it observes roughly 9% of them — so the threshold has to cover several consecutive misses. That makes the safe value a function of the controllers' actual advertising interval, which is a measured quantity, not a guess:
+| phase | when | interval | worst observed gap |
+|---|---|---|---|
+| fast | release to ~2 min | ~344 ms | 2233 ms |
+| slow | ~2 min to 2m54s | ~6 s | 7348 ms |
+| asleep | after 2m54s | silent | — |
 
-1. Set `debug_advertisements: true` and `logger.level: DEBUG`.
-2. Watch `Ride adv +N ms` lines with `tools/dashboard_logs.py`; `N` is the observed gap between sightings.
-3. Set `sleep_confirmation` to several times the *largest* gap seen while the controllers are sitting idle.
+Any fixed gap threshold is eventually crossed by the slow phase, so the bridge reconnects into a controller that is merely idling, not asleep. More scan duty cannot help: those gaps are the controller genuinely not transmitting.
 
-Hardware on 2026-08-09 showed Ride Left advertising continuously for at least nine minutes after being released, so a physical power-off was the only way to produce a gap. If that holds, the natural sleep/wake path rarely fires on its own and `max_suppression` becomes the routine reconnect route rather than a safety net — which is an argument for shortening it.
+The step down is one-directional, and that is the usable signal. A controller that has just woken or rebooted advertises fast; one that is stepping down cannot. So the bridge:
 
-Raising the tracker's scan duty while suppressed would allow a shorter threshold, but only if the measured interval justifies it; that is a change to make from data, not in advance.
+1. Latches "slowed" once a gap of `slow_gap` (default `5s`) proves fast advertising has ended. That value sits in the empty space between the two regimes, so the slow phase reaches it immediately and the fast phase cannot.
+2. Reconnects only on `wake_burst_count` (default `3`) sightings within `wake_burst_window` (default `3s`), ignoring sightings closer together than about 100 ms because one advertising event is often seen twice from different channels. Three spaced sightings need at least 12 s in the slow phase, so only a genuine return to fast advertising qualifies.
 
-`max_suppression` must be longer than `sleep_confirmation`; ESPHome rejects the configuration otherwise. Suppression is always abandoned by an OTA, a shutdown, or a BLE stack restart, so an aborted update can never leave the bridge refusing to reconnect.
+The practical result is that a button press or a short power-cycle brings the session back in about a second, and the step-down cannot trigger a false reconnect. The latch happens on its own roughly two minutes after release, with no user action.
+
+`sleep_confirmation` no longer decides reconnection; it only sets when `Ride Advertising` reads false.
+
+Re-measure with `debug_advertisements: true` and `logger.level: DEBUG` if the controllers' firmware changes: the `Ride adv +N ms` lines give the interval directly. Turn it back off afterwards — it is verbose and puts the controller's address in the log stream.
 
 While suppressed, `Bridge State` reads `ride_idle_sleeping` and `Ride Idle Disconnect Count` separates deliberate releases from `Ride Reconnect Count`. Every key is released and `Zwift Ride KB` stops advertising; whether the bonded host is also disconnected depends on `release_hid`.
 

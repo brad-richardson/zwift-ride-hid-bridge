@@ -274,7 +274,9 @@ SCANNING → CONNECTING → DISCOVERING → HANDSHAKING → READY
 
 On any transition out of `READY`, send an empty HID report before cleanup. Re-scan continuously with bounded backoff and filter for Ride left rather than relying on power-on order.
 
-`RIDE_IDLE` is the deliberate branch. Holding the GATT link keeps the controllers awake, so a quiet session is ended on purpose: the bridge releases the link, keeps the bonded HID host, and disables ESPHome's client so `auto_connect` cannot immediately reclaim the still-awake controllers. It re-enables the client only after the controller advertisement has been absent long enough to prove sleep and has then reappeared, with a suppression cap so a controller that never sleeps still recovers without a reboot.
+`RIDE_IDLE` is the deliberate branch. Holding the GATT link keeps the controllers awake, so a quiet session is ended on purpose: the bridge releases the link, releases the bonded HID host, and disables ESPHome's client so `auto_connect` cannot immediately reclaim the still-awake controllers.
+
+Re-arming cannot key off silence. Ride Left keeps advertising after release, stepping down from ~344 ms to a ~6 s interval before stopping near three minutes, so any fixed gap threshold is crossed by the step-down and reconnects into a controller that is merely idling. The step-down is one-directional, so the bridge instead latches once a `slow_gap` proves fast advertising has ended, then re-arms on a burst of fast advertisements — which a wake or reboot produces and the wind-down cannot. A suppression cap and an explicit reconnect action both remain as backstops.
 
 Two watchdogs guard the states above. `RideClient` bounds every asynchronous GATT step, and it additionally treats ESPHome's client returning to `IDLE` without a `CLOSE`/`DISCONNECT` event as a lost session, because ESPHome's own ten-second disconnect timeout reaches `IDLE` through a path that dispatches no node event. Without that check a dropped teardown event would leave the bridge reporting `READY` with keys held.
 
