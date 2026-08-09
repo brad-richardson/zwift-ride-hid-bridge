@@ -158,26 +158,33 @@ Holding the Ride GATT link keeps the controllers awake, so an unattended bridge 
 
 ### How the bridge decides the controllers are back
 
-The first design waited for a silence of `sleep_confirmation` and reconnected on the next advertisement. Hardware showed why that cannot work. Ride Left does not stop advertising when released — it steps down through two regimes on its way to sleep:
+Ride Left does not stop advertising when released, and this took three attempts to characterise correctly. Measured at 50% scan duty:
 
-| phase | when | interval | worst observed gap |
-|---|---|---|---|
-| fast | release to ~2 min | ~344 ms | 2233 ms |
-| slow | ~2 min to 2m54s | ~6 s | 7348 ms |
-| asleep | after 2m54s | silent | — |
+| phase | when | advertising interval |
+|---|---|---|
+| fast | release to ~2 min | ~196 ms, continuous |
+| slow | ~2 min to ~3 min | ~640 ms, continuous |
+| asleep | after ~3 min | silent |
 
-Any fixed gap threshold is eventually crossed by the slow phase, so the bridge reconnects into a controller that is merely idling, not asleep. More scan duty cannot help: those gaps are the controller genuinely not transmitting.
+Two rules were tried and disproved on hardware first:
 
-The step down is one-directional, and that is the usable signal. A controller that has just woken or rebooted advertises fast; one that is stepping down cannot. So the bridge:
+- **Wait for silence.** There is none until the controller sleeps, so this only ever reconnected after the full wind-down.
+- **Wait for a burst of advertisements.** At 640 ms a handful of sightings arrive within a couple of seconds anyway, so the slow phase satisfied it continuously and the bridge reconnected into a controller that was merely winding down.
 
-1. Latches "slowed" once a gap of `slow_gap` (default `5s`) proves fast advertising has ended. That value sits in the empty space between the two regimes, so the slow phase reaches it immediately and the fast phase cannot.
-2. Reconnects only on `wake_burst_count` (default `3`) sightings within `wake_burst_window` (default `3s`), ignoring sightings closer together than about 100 ms because one advertising event is often seen twice from different channels. Three spaced sightings need at least 12 s in the slow phase, so only a genuine return to fast advertising qualifies.
+Both failures trace to the same measurement error. The rate was originally inferred from gaps between sightings at 9.375% scan duty, where roughly half of all advertisements are missed — which reported the ~640 ms slow phase as a ~6 s one, a tenfold error. Every threshold sized against that number was wrong.
 
-The practical result is that a button press or a short power-cycle brings the session back in about a second, and the step-down cannot trigger a false reconnect. The latch happens on its own roughly two minutes after release, with no user action.
+What actually separates the two phases is the 3.3x rate change, so the bridge measures the mean gap over the last `rate_samples` sightings and applies hysteresis:
 
-`sleep_confirmation` no longer decides reconnection; it only sets when `Ride Advertising` reads false.
+- the rate rising past `slow_rate` (default `500ms`) latches the controller as no longer fast;
+- once latched, the rate falling below `wake_rate` (default `350ms`) is the wake, and reconnects.
 
-Re-measure with `debug_advertisements: true` and `logger.level: DEBUG` if the controllers' firmware changes: the `Ride adv +N ms` lines give the interval directly. Turn it back off afterwards — it is verbose and puts the controller's address in the log stream.
+Sightings closer together than about 100 ms are collapsed first, because one advertising event is often seen twice from different channels and would otherwise halve the apparent gap.
+
+This is why the reference tracker runs at 50% receive duty (`80ms`/`160ms`) rather than the original 9.375%. The rate has to be resolved for any of this to work, and the scanner only runs while the Ride link is down.
+
+`Ride Advertising` and `Ride Advertisement Age` show what the bridge currently sees; `sleep_confirmation` sets only when the former reads false.
+
+Re-measure with `debug_advertisements: true` and `logger.level: DEBUG` if controller firmware changes. Turn it off afterwards — it is verbose and puts the controller's address in the log stream.
 
 While suppressed, `Bridge State` reads `ride_idle_sleeping` and `Ride Idle Disconnect Count` separates deliberate releases from `Ride Reconnect Count`. Every key is released and `Zwift Ride KB` stops advertising; whether the bonded host is also disconnected depends on `release_hid`.
 

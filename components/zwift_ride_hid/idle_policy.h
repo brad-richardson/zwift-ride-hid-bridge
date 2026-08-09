@@ -22,34 +22,42 @@ struct RideIdleConfig {
   /// would otherwise keep the bridge offline forever. Zero disables the cap.
   uint32_t max_suppression_ms{60UL * 60UL * 1000UL};
 
-  /** Silence that proves the controller has left fast advertising.
+  /** Advertising rate thresholds, measured as a mean gap between sightings.
    *
-   * Ride Left does not stop advertising when released. Measured on hardware it
-   * holds ~344 ms for about two minutes (worst observed gap 2233 ms), drops to
-   * a ~6 s interval (gaps 5.4-7.3 s), then stops near three minutes. This sits
-   * between those two regimes, so it latches as soon as the slow phase starts
-   * and cannot be reached by missed packets during the fast phase.
+   * Ride Left does not stop advertising when released, and it does not
+   * advertise in bursts. Measured at 50% scan duty it runs continuously at
+   * ~196 ms for about two minutes, drops to a continuous ~640 ms, then stops
+   * near three minutes. Those two rates differ by 3.3x, which is the only
+   * usable discriminator: the payload never varies, and no gap length
+   * separates "winding down" from "asleep".
+   *
+   * Rate is deliberately measured rather than inferred from gap lengths. At
+   * the earlier 9.375% scan duty the same slow phase looked like a ~6 s
+   * interval, a tenfold error caused entirely by missed advertisements, and a
+   * detector sized against it reconnected into a controller that was merely
+   * winding down. Sampling has to resolve the rate for any of this to work.
+   *
+   * The two thresholds form a hysteresis band around the measured rates, so
+   * ordinary jitter cannot flip the state back and forth.
    */
-  uint32_t slow_gap_ms{5000};
+  uint32_t slow_rate_ms{500};
+  uint32_t wake_rate_ms{350};
 
-  /// Sightings within wake_burst_window_ms that together mean "advertising
-  /// fast again", which only a freshly woken or rebooted controller does. The
-  /// slow phase cannot produce these: three spaced sightings need at least
-  /// 12 s there.
-  uint8_t wake_burst_count{3};
-  uint32_t wake_burst_window_ms{3000};
+  /// Sightings averaged to obtain that rate. More is steadier but slower to
+  /// react; this many spans about 1.4 s of fast advertising.
+  uint8_t rate_sample_count{8};
 
-  /** Ignore sightings closer together than this when counting a burst.
+  /** Ignore sightings closer together than this when measuring the rate.
    *
-   * One advertising event is often seen twice a few milliseconds apart, from
-   * different channels. Counting both would let a single slow-phase event
-   * masquerade as fast advertising.
+   * One advertising event is often seen twice a few milliseconds apart from
+   * different channels, which would otherwise halve the apparent gap and make
+   * the slow phase look fast.
    */
   uint32_t burst_min_spacing_ms{100};
 };
 
-/// Most sightings the burst detector ever needs to remember.
-static constexpr uint8_t kMaxWakeBurstCount = 8;
+/// Most sightings the rate estimator ever needs to remember.
+static constexpr uint8_t kMaxRateSampleCount = 12;
 
 enum class RideIdleAction : uint8_t {
   /// Nothing to do this iteration.
@@ -111,9 +119,17 @@ class RideIdlePolicy {
   /// the next one will be treated as a wake.
   bool sleep_confirmed() const { return this->sleep_confirmed_; }
 
-  /// True once the controller has demonstrably left fast advertising, after
-  /// which a fast burst is accepted as a wake.
+  /// True once the controller's advertising rate has dropped out of the fast
+  /// regime, after which a return to fast advertising is accepted as a wake.
   bool slowed() const { return this->slowed_; }
+
+  /** Mean gap between recent sightings, or 0 before enough have been seen.
+   *
+   * This is the quantity both thresholds compare against, so exposing it makes
+   * a misbehaving re-arm diagnosable from Home Assistant instead of from a log
+   * capture.
+   */
+  uint32_t advertising_rate_ms() const;
   uint32_t idle_disconnect_count() const { return this->idle_disconnect_count_; }
 
   /// Quiet time so far. Only meaningful while a session is ready.
@@ -139,18 +155,17 @@ class RideIdlePolicy {
 
  protected:
   void begin_suppression_(uint32_t now);
-  void record_burst_sighting_(uint32_t now);
-  bool burst_detected_(uint32_t now) const;
-  uint8_t burst_capacity_() const;
+  void record_rate_sample_(uint32_t now);
+  uint8_t rate_capacity_() const;
 
   RideIdleConfig config_{};
   uint32_t last_activity_ms_{0};
   uint32_t suppressed_since_ms_{0};
   uint32_t last_advertisement_ms_{0};
   uint32_t idle_disconnect_count_{0};
-  // Sighting times feeding the burst detector, oldest first.
-  uint32_t burst_times_[kMaxWakeBurstCount]{};
-  uint8_t burst_length_{0};
+  // Sighting times feeding the rate estimate, oldest first.
+  uint32_t rate_times_[kMaxRateSampleCount]{};
+  uint8_t rate_length_{0};
   bool suppressed_{false};
   bool sleep_confirmed_{false};
   bool slowed_{false};

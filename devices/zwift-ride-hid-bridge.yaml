@@ -35,8 +35,7 @@ wifi:
 captive_portal:
 
 logger:
-  # MEASUREMENT: DEBUG carries the advertisement capture below.
-  level: DEBUG
+  level: INFO
 
 api:
   encryption:
@@ -97,9 +96,12 @@ esp32_ble:
 
 esp32_ble_tracker:
   scan_parameters:
-    # MEASUREMENT: 80/160 = 50% duty. At the production 9.375% only about half
-    # of advertisements are seen, which makes a periodic burst indistinguishable
-    # from a uniform slow rate. Restore 30ms/320ms afterwards.
+    # 80/160 = 50% receive duty. The reconnect logic measures the controller's
+    # advertising rate, and at the former 9.375% duty roughly half of all
+    # advertisements were missed, which made the ~640 ms slow phase look like a
+    # ~6 s one. The scanner only runs while the Ride link is down, and the HID
+    # host is released during an idle period, so little else competes for the
+    # radio.
     duration: 5min
     interval: 160ms
     window: 80ms
@@ -134,13 +136,12 @@ zwift_ride_hid:
   # them use their own sleep behavior; reconnecting is fast enough that the
   # trade is worth it.
   idle_timeout:
-    # MEASUREMENT: short cycle so the slow phase can be reached repeatedly.
-    disconnect_after: 5min
+    disconnect_after: 15min
     # Only feeds the Ride Advertising diagnostic now. Reconnection is decided
     # by the wake burst below, not by a silence threshold.
-    sleep_confirmation: 10min
+    sleep_confirmation: 30s
     # Backstop only: the wake burst is the normal route back.
-    max_suppression: 0s
+    max_suppression: 60min
     # A connected keyboard makes iPadOS hide its on-screen keyboard, so the
     # bonded host is released for the duration of the idle period.
     release_hid: true
@@ -149,13 +150,15 @@ zwift_ride_hid:
     # silence at 2m54s. slow_gap sits between the two regimes so it latches
     # when the controller leaves fast advertising and cannot be reached by
     # missed packets before that.
-    # MEASUREMENT: an hour never latches, which disables the wake burst and
-    # leaves the slow phase to run uninterrupted for the full capture.
-    slow_gap: 60min
+    # Ride Left advertises continuously at ~196 ms for about two minutes after
+    # release, drops to a continuous ~640 ms, then stops near three minutes.
+    # Reconnection keys off that 3.3x rate change: the rate rising past
+    # slow_rate latches, and falling back below wake_rate is the wake.
+    slow_rate: 500ms
+    wake_rate: 350ms
+    rate_samples: 8
     # A wake or reboot returns to ~344 ms advertising, which the slow phase
     # cannot imitate: three spaced sightings need at least 12 s there.
-    wake_burst_count: 3
-    wake_burst_window: 3s
   # GPIO21 is the XIAO ESP32-S3's active-low orange user LED. The component
   # owns it so its pattern can describe Ride, HID, fault, and OTA state.
   status_led:
@@ -199,7 +202,7 @@ zwift_ride_hid:
   # Logs every matching Ride advertisement with its manufacturer payload,
   # flags, and interval. Needed only to re-measure the advertising cadence,
   # and it puts the controller's address in the log stream, so leave it off.
-  debug_advertisements: true
+  debug_advertisements: false
 
 # Intentionally omitted for the dual-role BLE feasibility test:
 # web_server:

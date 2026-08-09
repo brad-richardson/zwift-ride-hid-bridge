@@ -93,16 +93,15 @@ class ZwiftRideHid : public Component,
    */
   void request_reconnect();
   void set_idle_timeout(uint32_t idle_timeout_ms, uint32_t sleep_confirm_ms,
-                        uint32_t max_suppression_ms, uint32_t slow_gap_ms,
-                        uint8_t wake_burst_count,
-                        uint32_t wake_burst_window_ms) {
+                        uint32_t max_suppression_ms, uint32_t slow_rate_ms,
+                        uint32_t wake_rate_ms, uint8_t rate_sample_count) {
     RideIdleConfig config{};
     config.idle_timeout_ms = idle_timeout_ms;
     config.sleep_confirm_ms = sleep_confirm_ms;
     config.max_suppression_ms = max_suppression_ms;
-    config.slow_gap_ms = slow_gap_ms;
-    config.wake_burst_count = wake_burst_count;
-    config.wake_burst_window_ms = wake_burst_window_ms;
+    config.slow_rate_ms = slow_rate_ms;
+    config.wake_rate_ms = wake_rate_ms;
+    config.rate_sample_count = rate_sample_count;
     this->idle_policy_.set_config(config);
   }
 
