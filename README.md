@@ -1,6 +1,6 @@
 # Zwift Ride HID Bridge
 
-> **Status: feature-complete implementation candidate; not tested on hardware.** Host-side protocol, input-state, and keyboard-report tests exercise the pure C++ core, and CI compiles the ESPHome image. The Bluetooth dual-role path, pairing, haptics, physical button labels, and OTA teardown still need validation on a XIAO ESP32-S3 plus a real Zwift Ride. Keep USB recovery available for the first flash.
+> **Status: installed on a XIAO ESP32-S3; encrypted API and password-protected OTA validated.** Host-side protocol, input-state, and keyboard-report tests exercise the pure C++ core, and CI compiles the ESPHome image. The Ride/HID dual-role path, pairing, haptics, physical button labels, and OTA teardown during active input still need validation with a real Zwift Ride and iPad. Keep USB recovery available during hardware testing.
 
 This ESPHome external component turns the integrated Zwift Ride controller pair into a stateful BLE keyboard. It is designed first for Delta on iPadOS, but both bundled profiles emit ordinary HID keyboard usages and can work with other applications. The reference target is a Seeed Studio XIAO ESP32-S3 using ESP-IDF and ESPHome `2026.7.4`.
 
@@ -10,6 +10,7 @@ The project is downstream of [Fuenfachsen/Zword_ZwiftRide-to-BLE-Keyboard](https
 
 - ESPHome owns Wi-Fi, encrypted Home Assistant API access, native OTA, safe mode, scanning, and the single Bluedroid lifecycle.
 - The component auto-discovers **Ride Left** using Zwift's FC82 service, company ID, and Ride-left device ID, then hands the selected address to ESPHome's stock BLE client. Ride Left tunnels Ride Right input, so the bridge does not consume a third controller connection.
+- The HID keyboard is not advertised until Ride Left completes its handshake and input subscription. Ride loss releases every key and suppresses new HID connections; an already-connected, bonded iPad can remain attached and resume without another pairing cycle.
 - The component discovers the FC82 characteristics, subscribes to notifications, writes `RideOn`, and can send the controller's haptic command.
 - A bounded protobuf decoder accepts both observed analog-record layouts, decodes all 16 known button bits and four signed analog channels, and rejects malformed frames transactionally.
 - Threshold plus hysteresis turns both polarities of both active levers into four independent logical inputs.
@@ -46,11 +47,12 @@ See [the complete mapping table](docs/delta-mapping.md) for every button—inclu
 
 - Close Zwift, BikeControl, and other apps that may already hold the controllers' host connection.
 - Power both Ride controllers. The bridge connects only to Ride Left; Right normally joins through Left.
+- Controller discovery uses active, continuous scanning: a 30 ms receive window every 320 ms (9.375% nominal receive duty) in back-to-back five-minute scan sessions. Scanning briefly pauses for connection transitions, then resumes even while Ride is connected so loss recovery remains immediate.
 - Automatic selection locks the first exact Ride Left match for that boot. If more than one Ride setup is in radio range, replace the all-zero `ble_client` address with the intended Left controller's real MAC to pin it explicitly.
 - Pair the advertised `Zwift Ride KB` once from the iPad. Bond data is stored in ESP32 NVS, so normal application OTA updates should not require re-pairing. Erasing flash/NVS will.
 - Short taps of the two orange logo/power controls emit Select and Start. A long hold is still the controller power gesture and may disconnect it.
-- Controller loss sends an empty report while the HID link is available; either link loss clears the bridge's internal key state so a later session cannot inherit held keys. ESPHome then retries the Ride link and the HID service returns to advertising. These paths are implemented but remain hardware-untested.
-- At OTA start the bridge releases keys, pauses Ride/HID report processing, disconnects both peers, and stops HID advertising before the update proceeds. An aborted/failed OTA resumes scanning and advertising without accepting queued input from the old Ride session; a successful OTA reboots into the new image.
+- Controller loss sends an empty report while the HID link is available; either link loss clears the bridge's internal key state so a later session cannot inherit held keys. ESPHome then retries Ride, but HID advertising returns only after a fresh controller handshake. These paths are implemented but remain hardware-untested.
+- At OTA start the bridge releases keys, pauses Ride/HID report processing, disconnects both peers, and stops HID advertising before the update proceeds. An aborted/failed OTA resumes controller scanning without accepting queued input or advertising HID until a fresh Ride handshake; a successful OTA reboots into the new image.
 
 After the first USB flash, normal updates are one pinned-SHA change and an ESPHome OTA install. Keep the last hardware-tested SHA handy: rollback means restoring that SHA in Device Builder, compiling, and installing it over the network. OTA cannot repair every bootloader, partition, or flash failure, so USB remains the recovery path.
 

@@ -47,7 +47,10 @@ public:
   /** Ask ESPHome's advertising owner to advertise the HID service. */
   bool advertise();
 
-  /** Resume report output and advertising after quiesce()/stop(). */
+  /** Gate HID advertising on the upstream input source being protocol-ready. */
+  void set_advertising_allowed(bool allowed);
+
+  /** Resume report output; advertising remains gated by its upstream source. */
   void resume();
 
   /** Release all keys, disconnect the HID host, and stop advertising. */
@@ -66,6 +69,7 @@ public:
   bool connected() const { return this->connected_; }
   bool ready() const;
   bool service_ready() const { return this->services_ready_; }
+  bool advertising_allowed() const { return this->advertising_allowed_; }
   bool quiesced() const { return this->quiesced_; }
   bool failed() const { return this->failed_; }
   uint8_t keyboard_leds() const { return this->keyboard_leds_; }
@@ -187,6 +191,7 @@ protected:
   bool congested_{false};
   bool suspended_{false};
   bool pending_report_{false};
+  bool advertising_allowed_{false};
   bool quiesced_{false};
   bool failed_{false};
 };

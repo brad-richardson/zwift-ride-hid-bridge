@@ -26,9 +26,11 @@ Treat exact LED timing as diagnostic rather than a public API until it has been 
 
 ## Dual-role BLE and first pairing
 
+- [ ] With both Ride controllers off, confirm `Zwift Ride KB` is not discoverable from iPadOS Bluetooth settings.
 - [ ] Power Ride Left and Right. Confirm the ESP32 connects only to Left and receives tunneled input from both halves.
 - [ ] Confirm Ride Right (`0x094A`, device ID `7`), an FC82 advertisement without the matching manufacturer tuple, and a matching manufacturer tuple without FC82 do not trigger selection.
 - [ ] Confirm the bridge discovers the FC82 service, subscribes to async notifications, and successfully writes ASCII `RideOn`.
+- [ ] Confirm `Zwift Ride KB` becomes discoverable only after that handshake, then suppresses advertising again when Ride Left disconnects. If the bonded iPad was already connected, confirm it remains attached with all keys released.
 - [ ] With the Ride link still ready, find `Zwift Ride KB` in iPadOS Bluetooth settings and pair it.
 - [ ] Confirm encrypted HID input works in Notes and that bonding survives an ESP32 reboot without erasing NVS.
 - [ ] Confirm the optional one-time connection haptic occurs after the Ride handshake and does not repeat in a loop.
@@ -89,7 +91,7 @@ Expected diagnostic keys are arrows; `a/b/y/z`; F1–F4 for LS1/LS2/LB/left logo
 - [ ] Keep the previous known-good full commit SHA before starting.
 - [ ] Begin native OTA with an input held. Observe an empty report before Ride disconnect and before input/report processing is quiesced.
 - [ ] Complete an OTA and confirm the new image boots, reconnects Wi-Fi/Ride/iPad, and preserves the bond.
-- [ ] Abort or force one OTA error. Confirm input remains released and scanning/advertising resume without a reboot.
+- [ ] Abort or force one OTA error. Confirm input remains released and controller scanning resumes without a reboot, while HID stays hidden until a fresh Ride handshake.
 - [ ] Install the previous pinned SHA OTA as a rollback drill.
 - [ ] Trigger ESPHome safe mode with an intentionally failing application boot only when USB recovery is available; verify recovery access.
 

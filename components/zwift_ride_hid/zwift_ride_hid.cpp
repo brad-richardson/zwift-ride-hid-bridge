@@ -239,6 +239,7 @@ void ZwiftRideHid::on_ride_ready() {
     return;
   this->ride_ready_ = true;
   this->node_state = esp32_ble_tracker::ClientState::ESTABLISHED;
+  this->hid_keyboard_.set_advertising_allowed(true);
   if (this->ever_ride_ready_) {
     this->reconnect_count_++;
   } else {
@@ -246,7 +247,9 @@ void ZwiftRideHid::on_ride_ready() {
   }
   this->connect_haptic_pending_ = this->connect_haptic_;
   this->diagnostics_dirty_ = true;
-  ESP_LOGI(TAG, "Ride Left handshake and input subscription ready");
+  ESP_LOGI(TAG,
+           "Ride Left handshake and input subscription ready; HID advertising "
+           "enabled");
 }
 
 void ZwiftRideHid::on_ride_disconnected() {
@@ -255,8 +258,11 @@ void ZwiftRideHid::on_ride_disconnected() {
   this->connect_haptic_pending_ = false;
   this->button_haptic_pending_ = false;
   this->release_all_("Ride disconnected");
+  this->hid_keyboard_.set_advertising_allowed(false);
   this->diagnostics_dirty_ = true;
-  ESP_LOGW(TAG, "Ride Left disconnected; all keyboard keys released");
+  ESP_LOGW(TAG,
+           "Ride Left disconnected; all keyboard keys released and HID "
+           "advertising disabled");
 }
 
 void ZwiftRideHid::on_ride_notification(const uint8_t *data, uint16_t length) {
@@ -394,7 +400,9 @@ void ZwiftRideHid::on_ota_global_state(ota::OTAState state, float progress, uint
     this->ota_active_ = false;
     this->hid_keyboard_.resume();
     this->diagnostics_dirty_ = true;
-    ESP_LOGW(TAG, "OTA stopped before completion; BLE bridge resumed");
+    ESP_LOGW(TAG,
+             "OTA stopped before completion; Ride scanning resumed with HID "
+             "advertising gated until a fresh handshake");
   }
 }
 #endif

@@ -204,8 +204,20 @@ void HidKeyboard::loop() {
     if (time_reached(now, this->next_report_attempt_ms_))
       this->send_current_report_();
   }
-  if (this->advertising_desired_ && this->services_ready_ &&
-      !this->connected_ && !this->quiesced_ && !this->failed_) {
+  if (!this->advertising_allowed_ && this->advertising_start_requested_ &&
+      !this->advertising_stop_requested_ &&
+      time_reached(millis(), this->next_advertising_attempt_ms_)) {
+    // If the broker dropped a late START completion after the gate closed,
+    // conservatively issue another stop so HID cannot remain discoverable.
+    ESP_LOGW(TAG,
+             "Advertising start completion missing after gate close; stopping");
+    this->advertising_start_requested_ = false;
+    this->advertising_active_ = true;
+    this->stop_advertising_();
+  }
+  if (this->advertising_desired_ && this->advertising_allowed_ &&
+      this->services_ready_ && !this->connected_ && !this->quiesced_ &&
+      !this->failed_) {
     const uint32_t now = millis();
     if (this->advertising_stop_requested_ &&
         time_reached(now, this->next_advertising_attempt_ms_)) {
@@ -721,7 +733,8 @@ void HidKeyboard::gatts_event_handler(esp_gatts_cb_event_t event,
     // A different ESPHome feature could have started the shared advertiser
     // while this database was still being built, or a connect may race with
     // quiesce(). Never let a host cache or use a partial/suppressed HID DB.
-    if (!this->services_ready_ || this->quiesced_) {
+    if (!this->services_ready_ || !this->advertising_allowed_ ||
+        this->quiesced_) {
       ESP_LOGW(TAG, "Rejecting HID host while the service is unavailable");
       esp_ble_gap_disconnect(param->connect.remote_bda);
       return;
@@ -858,8 +871,8 @@ void HidKeyboard::gap_event_handler(esp_gap_ble_cb_event_t event,
       ESP_LOGW(TAG, "BLE advertising start failed (status=%u); retrying",
                static_cast<unsigned>(param->adv_start_cmpl.status));
       this->next_advertising_attempt_ms_ = millis() + 500;
-    } else if (!this->advertising_desired_ || this->quiesced_ ||
-               this->connected_) {
+    } else if (!this->advertising_desired_ || !this->advertising_allowed_ ||
+               this->quiesced_ || this->connected_) {
       this->stop_advertising_();
     }
     return;
@@ -874,8 +887,8 @@ void HidKeyboard::gap_event_handler(esp_gap_ble_cb_event_t event,
                static_cast<unsigned>(param->adv_stop_cmpl.status));
       if (!this->advertising_desired_ || this->quiesced_)
         this->stop_advertising_();
-    } else if (this->advertising_desired_ && this->services_ready_ &&
-               !this->quiesced_ && !this->connected_) {
+    } else if (this->advertising_desired_ && this->advertising_allowed_ &&
+               this->services_ready_ && !this->quiesced_ && !this->connected_) {
       // resume() may have raced with the asynchronous stop. Restart only after
       // Bluedroid confirms that the prior advertising instance is gone.
       this->advertise();
@@ -1003,7 +1016,8 @@ bool HidKeyboard::send_current_report_() {
 bool HidKeyboard::release_all() { return this->send_report(0, nullptr, 0); }
 
 bool HidKeyboard::advertise() {
-  if (!this->services_ready_ || this->quiesced_ || this->failed_) {
+  if (!this->services_ready_ || !this->advertising_allowed_ ||
+      this->quiesced_ || this->failed_) {
     this->advertising_desired_ = false;
     return false;
   }
@@ -1040,6 +1054,30 @@ bool HidKeyboard::advertise() {
 #endif
 }
 
+void HidKeyboard::set_advertising_allowed(bool allowed) {
+  if (allowed) {
+    // OTA/shutdown quiesce is a stronger, independent gate. Do not remember a
+    // late readiness event and accidentally advertise when resume() is called;
+    // the owner must deliver a fresh readiness event after resume.
+    if (this->quiesced_)
+      return;
+    this->advertising_allowed_ = true;
+    this->advertise();
+    return;
+  }
+
+  // This gate governs discovery only. An established, bonded HID link remains
+  // connected so the owner can deliver an all-up report on Ride loss without
+  // forcing the user to wait for an iPad reconnection.
+  this->advertising_allowed_ = false;
+  const bool should_stop_advertising =
+      this->advertising_desired_ || this->advertising_active_ ||
+      this->advertising_start_requested_ || this->advertising_stop_requested_;
+  this->advertising_desired_ = false;
+  if (should_stop_advertising)
+    this->stop_advertising_();
+}
+
 void HidKeyboard::quiesce() {
   if (this->quiesced_)
     return;
@@ -1047,6 +1085,7 @@ void HidKeyboard::quiesce() {
   // are still usable. There is intentionally no delay: OTA/shutdown paths must
   // remain non-blocking, and Bluedroid owns transmission of the queued packet.
   this->release_all();
+  this->advertising_allowed_ = false;
   this->quiesced_ = true;
   this->advertising_desired_ = false;
   this->pending_report_ = false;
@@ -1065,7 +1104,6 @@ void HidKeyboard::stop() { this->quiesce(); }
 void HidKeyboard::resume() {
   this->quiesced_ = false;
   this->pending_report_ = true;
-  this->advertising_desired_ = true;
   this->advertise();
 }
 
@@ -1149,6 +1187,7 @@ void HidKeyboard::reset_server_state_() {
   this->registered_ = false;
   this->services_ready_ = false;
   this->construction_deadline_ms_ = 0;
+  this->advertising_allowed_ = false;
   this->advertising_desired_ = false;
   this->advertising_active_ = false;
   this->advertising_start_requested_ = false;

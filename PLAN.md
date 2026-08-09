@@ -1,6 +1,6 @@
 # Implementation plan
 
-> **Implementation status:** the version-1 software surface described below is present, with host tests and a pinned ESPHome compile check in CI. It has not been exercised on a XIAO ESP32-S3, real Ride controllers, or an iPad. Milestone acceptance lists are therefore hardware validation gates, not claims of completion.
+> **Implementation status:** the version-1 software surface described below is present, with host tests and a pinned ESPHome compile check in CI. It is installed on a XIAO ESP32-S3; encrypted API access and password-protected OTA are verified. The real Ride-controller and iPad HID paths remain hardware validation gates, not claims of completion.
 
 ## Recommendation
 
@@ -166,9 +166,9 @@ Advanced `mappings:` overrides remain deferred until a canned profile works on h
 
 ## Milestones and gates
 
-### 0. Bootstrap and hardware facts — software complete, hardware pending
+### 0. Bootstrap and hardware facts — complete
 
-Pin ESPHome 2026.7.4 (or move the repository and home server together to a reviewed newer patch) and keep `secrets.example.yaml` credential-free. Target the Seeed Studio XIAO ESP32-S3 with 8 MB flash, 8 MB octal PSRAM, and its active-low user LED on GPIO21. Prefer the specific `seeed_xiao_esp32s3` board definition; retain the user's proven `esp32-s3-devkitc-1` definition as the documented fallback if their Device Builder version rejects the specific ID. The repository is public and the production contract now points to its real URL; the user must select a reviewed post-implementation SHA after CI passes.
+Pin ESPHome 2026.7.4 (or move the repository and home server together to a reviewed newer patch) and keep `secrets.example.yaml` credential-free. Target the Seeed Studio XIAO ESP32-S3 with 8 MB flash, 8 MB octal PSRAM, and its active-low user LED on GPIO21. Prefer the specific `seeed_xiao_esp32s3` board definition; retain the user's proven `esp32-s3-devkitc-1` definition as the documented fallback if their Device Builder version rejects the specific ID. The repository is public and the production Device Builder configuration points to a reviewed immutable commit SHA.
 
 Acceptance:
 
@@ -176,7 +176,7 @@ Acceptance:
 - first USB flash boots, joins Wi-Fi, appears in Device Builder, and accepts a no-op OTA update;
 - no credentials or real device addresses enter git.
 
-The feature-complete candidate compiles on ESPHome 2026.7.4 / ESP-IDF 5.5.5. With automatic Ride discovery, its 1,278,851-byte image uses 140,387 bytes of DIRAM (41.1%) and 32.5% of the 3,932,160-byte OTA application partition, leaving 67% of that partition free.
+The feature-complete candidate compiles on ESPHome 2026.7.4 / ESP-IDF 5.5.5. With automatic Ride discovery and Ride-gated HID advertising, its 1,279,155-byte image uses 140,387 bytes of DIRAM (41.1%) and 32.5% of the 3,932,160-byte OTA application partition, leaving 67% of that partition free.
 
 ### 1. Dual-role feasibility (implemented, hard hardware gate)
 
@@ -185,6 +185,7 @@ The component implements the Ride client and a minimal HID server while letting 
 Acceptance:
 
 - iPad pairs with `Zwift Ride KB` and a synthetic test action types one character in Notes;
+- `Zwift Ride KB` is not advertised before Ride Left completes its handshake, and Ride loss suppresses new HID connections until a fresh handshake;
 - the bridge simultaneously connects to Ride left and receives a `0x23` frame;
 - one OTA succeeds after releasing keys and suspending BLE work;
 - after reboot, the bonded iPad and Ride controller reconnect without erasing pairings;
@@ -335,11 +336,10 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 | iPad bonding changes during firmware updates | Preserve NVS/partition layout; test OTA reboot and re-pair recovery before endurance work. |
 | Upstream GPL code provenance | GPL-3.0-only repo, prominent Zword attribution, and exact SHA/file records before importing or adapting code. |
 
-## Remaining inputs before hardware validation
+## Remaining inputs before Ride/HID validation
 
-These do not block repository implementation, but they do block the first device test:
+The XIAO is adopted, online, and accepts password-protected OTA updates. These remaining inputs block the dual-role controller/iPad test:
 
-- confirmation that Device Builder can use the repository pin, ESPHome `2026.7.4`;
 - hardware confirmation that automatic discovery selects only Ride Left and reconnects to the per-boot locked address;
 - confirmation that the documented upper/middle controls match the printed LS1/LS2 and RS1/RS2 numbering;
 - which sign of each analog lever should be considered steering vs braking on the physical bike.

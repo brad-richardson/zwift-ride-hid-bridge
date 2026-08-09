@@ -88,6 +88,12 @@ esp32_ble:
 
 esp32_ble_tracker:
   scan_parameters:
+    # Active receive duty is 30/320 = 9.375%. ESPHome runs back-to-back
+    # five-minute sessions so a sleeping controller can always reconnect.
+    duration: 5min
+    interval: 320ms
+    window: 30ms
+    active: true
     continuous: true
 
 ble_client:
