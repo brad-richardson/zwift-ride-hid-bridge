@@ -2,7 +2,7 @@
 
 [`zwift-ride-hid-bridge.yaml`](zwift-ride-hid-bridge.yaml) is the reference configuration for a Seeed Studio XIAO ESP32-S3 with 8 MB flash and octal PSRAM. It pins ESPHome `2026.7.4`, uses ESP-IDF, and intentionally loads the component from `../components` so a repository checkout and CI compile exactly the source under review.
 
-The image is feature-complete but hardware-untested. Keep a USB cable and serial recovery available for the first installation.
+The image is feature-complete and in live hardware validation. Auto-discovery, the Ride handshake, Right-side tunneling, encrypted iPad HID, OTA reconnect, every digital input identity, both lever channels, and active-session scanner shutdown have been observed on the target XIAO. Keep a USB cable and serial recovery available until the sleep/loss and endurance gates pass.
 
 ## Secrets
 

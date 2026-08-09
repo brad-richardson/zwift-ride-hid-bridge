@@ -1,6 +1,6 @@
 # Implementation plan
 
-> **Implementation status:** the version-1 software surface described below is present, with host tests and a pinned ESPHome compile check in CI. It is installed on a XIAO ESP32-S3; encrypted API access and password-protected OTA are verified. The real Ride-controller and iPad HID paths remain hardware validation gates, not claims of completion.
+> **Implementation status:** the version-1 software surface described below is present, with host tests and a pinned ESPHome compile check in CI. Live XIAO/Ride/iPad testing has verified automatic discovery, `RideOn`, Right-side tunneling, encrypted HID pairing and reports, active-link OTA reconnect, all 16 raw digital identities, both lever channels, and active-session scanner shutdown. Sleep/loss recovery, haptics, held-key OTA teardown, exact Delta gameplay, and endurance remain validation gates.
 
 ## Recommendation
 
@@ -176,11 +176,11 @@ Acceptance:
 - first USB flash boots, joins Wi-Fi, appears in Device Builder, and accepts a no-op OTA update;
 - no credentials or real device addresses enter git.
 
-The feature-complete candidate compiles on ESPHome 2026.7.4 / ESP-IDF 5.5.5. With automatic Ride discovery and Ride-gated HID advertising, its 1,279,155-byte image uses 140,387 bytes of DIRAM (41.1%) and 32.5% of the 3,932,160-byte OTA application partition, leaving 67% of that partition free.
+The feature-complete candidate compiles on ESPHome 2026.7.4 / ESP-IDF 5.5.5. With automatic Ride discovery, Ride-gated HID advertising, and adaptive scanner shutdown, its 1,279,563-byte image uses 140,395 bytes of DIRAM (41.1%) and 32.5% of the 3,932,160-byte OTA application partition, leaving 67% of that partition free.
 
-### 1. Dual-role feasibility (implemented, hard hardware gate)
+### 1. Dual-role feasibility (core path passed; resilience gates remain)
 
-The component implements the Ride client and a minimal HID server while letting ESPHome initialize Bluedroid and own its event brokers. Source provenance is recorded in `NOTICE.md`. The remaining gate is to prove, in the same running image, an iPad HID link plus a Ride-left connection, successful `RideOn`, and a real `0x23` notification.
+The component implements the Ride client and a minimal HID server while letting ESPHome initialize Bluedroid and own its event brokers. Source provenance is recorded in `NOTICE.md`. A live session proved an iPad HID link plus Ride Left, successful `RideOn`, real `0x23` notifications from both controller halves, and automatic reconnection after OTA. The remaining gates are failure-path and endurance tests.
 
 Acceptance:
 
@@ -336,13 +336,12 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 | iPad bonding changes during firmware updates | Preserve NVS/partition layout; test OTA reboot and re-pair recovery before endurance work. |
 | Upstream GPL code provenance | GPL-3.0-only repo, prominent Zword attribution, and exact SHA/file records before importing or adapting code. |
 
-## Remaining inputs before Ride/HID validation
+## Remaining inputs before endurance validation
 
-The XIAO is adopted, online, and accepts password-protected OTA updates. These remaining inputs block the dual-role controller/iPad test:
+The XIAO is adopted, online, and accepts password-protected OTA updates. Automatic Ride Left selection and the upper/middle/lower physical ordering were confirmed by live capture. These remaining inputs block final behavior and endurance sign-off:
 
-- hardware confirmation that automatic discovery selects only Ride Left and reconnects to the per-boot locked address;
-- confirmation that the documented upper/middle controls match the printed LS1/LS2 and RS1/RS2 numbering;
 - which sign of each analog lever should be considered steering vs braking on the physical bike.
+- controller sleep timing and the desired long-idle scan backoff after Ride disconnects.
 
 Known hardware/configuration facts:
 

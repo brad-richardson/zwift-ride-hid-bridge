@@ -1,6 +1,6 @@
 # Zwift Ride HID Bridge
 
-> **Status: installed on a XIAO ESP32-S3; encrypted API and password-protected OTA validated.** Host-side protocol, input-state, and keyboard-report tests exercise the pure C++ core, and CI compiles the ESPHome image. The Ride/HID dual-role path, pairing, haptics, physical button labels, and OTA teardown during active input still need validation with a real Zwift Ride and iPad. Keep USB recovery available during hardware testing.
+> **Status: live hardware validation underway.** A XIAO ESP32-S3 has auto-discovered Ride Left, completed the `RideOn` handshake, received tunneled Right input, paired with an iPad as an encrypted HID keyboard, survived active-link OTA/reconnects, and captured all 16 digital controls plus both lever channels. Host tests and CI cover the corrected full button map. Haptics, controller sleep/loss recovery, held-key OTA teardown, exact Delta gameplay, and endurance still need validation. Keep USB recovery available during hardware testing.
 
 This ESPHome external component turns the integrated Zwift Ride controller pair into a stateful BLE keyboard. It is designed first for Delta on iPadOS, but both bundled profiles emit ordinary HID keyboard usages and can work with other applications. The reference target is a Seeed Studio XIAO ESP32-S3 using ESP-IDF and ESPHome `2026.7.4`.
 

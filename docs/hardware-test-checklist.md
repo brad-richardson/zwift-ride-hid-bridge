@@ -1,6 +1,6 @@
 # Hardware test checklist
 
-The repository is a feature-complete **hardware-untested** candidate. Host tests and an ESPHome compile do not validate the radio, GATT timing, iPadOS HID behavior, real packet variants, physical label ordering, or OTA teardown. Work through this list before describing any commit as known-good.
+The repository is a feature-complete candidate in live hardware validation. On 2026-08-09, the target XIAO auto-discovered Ride Left, completed the handshake, received Right-side input, paired with an iPad, reconnected both links after OTA, captured every digital input and both lever channels, and stopped its scanner during the active session. The remaining unchecked items still matter: especially sleep/loss recovery, held-key OTA teardown, exact emitted keys after the captured-mask correction, haptics, and endurance.
 
 Record the tested full Git SHA, ESPHome version, controller firmware versions, iPad model/iPadOS version, observations, and firmware-size summary with the results.
 
