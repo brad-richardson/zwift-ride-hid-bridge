@@ -901,13 +901,12 @@ void test_fast_advertising_burst_is_a_wake() {
   EXPECT_FALSE(policy.on_advertisement(now));
   EXPECT_TRUE(policy.slowed());
 
-  // A wake or reboot returns to fast advertising. The fourth sighting inside
-  // the burst window is the signal, and it arrives about a second after the
-  // controller comes back rather than after a long silence.
+  // A wake or reboot returns to fast advertising. The third spaced sighting
+  // inside the burst window is the signal, so the session comes back about a
+  // second after the controller does rather than after a long silence.
   EXPECT_FALSE(policy.on_advertisement(now + 30000));
-  EXPECT_FALSE(policy.on_advertisement(now + 30325));
-  EXPECT_FALSE(policy.on_advertisement(now + 30650));
-  EXPECT_TRUE(policy.on_advertisement(now + 30975));
+  EXPECT_FALSE(policy.on_advertisement(now + 30344));
+  EXPECT_TRUE(policy.on_advertisement(now + 30688));
   EXPECT_FALSE(policy.suppressed());
   EXPECT_FALSE(policy.slowed());
 }
@@ -943,6 +942,54 @@ void test_controller_that_stops_outright_still_wakes() {
   feed_advertisements(&policy, 400000, 325, 4, &rearmed);
   EXPECT_TRUE(rearmed);
   EXPECT_FALSE(policy.suppressed());
+}
+
+void test_slow_phase_duplicates_are_not_a_burst() {
+  // The captured slow phase: one advertising event every ~6 s, each often
+  // seen twice a few milliseconds apart from a second channel. Counting those
+  // duplicates would let a single slow event look like fast advertising.
+  auto policy = idle_policy(300000, 30000, 0, 5000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  uint32_t now = 300000;
+  bool rearmed = false;
+  for (uint32_t event = 0; event < 12; event++) {
+    now += 6000;
+    if (policy.on_advertisement(now)) rearmed = true;
+    // Same event, other channel.
+    if (policy.on_advertisement(now + 21)) rearmed = true;
+    policy.poll(now + 21, false);
+  }
+  EXPECT_FALSE(rearmed);
+  EXPECT_TRUE(policy.suppressed());
+  // The slow gaps themselves latch the controller as no longer fast.
+  EXPECT_TRUE(policy.slowed());
+
+  // A genuine wake at the measured fast rate still gets through.
+  feed_advertisements(&policy, now + 60000, 344, 3, &rearmed);
+  EXPECT_TRUE(rearmed);
+  EXPECT_FALSE(policy.suppressed());
+}
+
+void test_fast_phase_gaps_do_not_latch_slow() {
+  // Worst gap measured during the fast phase was 2233 ms. slow_gap sits above
+  // that, so ordinary missed packets must never arm the burst detector while
+  // the controller is still advertising fast.
+  auto policy = idle_policy(300000, 30000, 0, 5000);
+  policy.on_session_ready(0);
+  EXPECT_EQ(bridge::RideIdleAction::DISCONNECT, policy.poll(300000, true));
+
+  uint32_t now = 300000;
+  bool rearmed = false;
+  for (uint32_t i = 0; i < 40; i++) {
+    now += (i % 8 == 7) ? 2233 : 344;
+    if (policy.on_advertisement(now)) rearmed = true;
+    policy.poll(now, false);
+  }
+  EXPECT_FALSE(rearmed);
+  EXPECT_FALSE(policy.slowed());
+  EXPECT_TRUE(policy.suppressed());
 }
 
 void test_idle_timings_survive_the_millis_rollover() {
@@ -1015,6 +1062,8 @@ int main() {
   run_test("fast advertising burst is a wake", test_fast_advertising_burst_is_a_wake);
   run_test("burst before the controller slows is ignored", test_burst_before_the_controller_slows_is_ignored);
   run_test("controller that stops outright still wakes", test_controller_that_stops_outright_still_wakes);
+  run_test("slow-phase duplicates are not a burst", test_slow_phase_duplicates_are_not_a_burst);
+  run_test("fast-phase gaps do not latch slow", test_fast_phase_gaps_do_not_latch_slow);
   run_test("idle timings survive the millis rollover", test_idle_timings_survive_the_millis_rollover);
 
   if (failures != 0) {

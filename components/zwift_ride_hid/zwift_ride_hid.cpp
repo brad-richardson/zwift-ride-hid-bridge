@@ -431,15 +431,16 @@ void ZwiftRideHid::update_idle_policy_() {
   }
 
   // Announce the moment the bridge becomes willing to reconnect. Without this
-  // line, "nothing happened" is indistinguishable from a broken re-arm.
-  if (this->ride_idle_suppressed_ && this->idle_policy_.sleep_confirmed() &&
+  // line, "nothing happened" is indistinguishable from a broken re-arm. It
+  // keys off the slow latch rather than the silence timer, because the latch
+  // is what actually lets a wake burst through.
+  if (this->ride_idle_suppressed_ && this->idle_policy_.slowed() &&
       !this->sleep_confirmed_logged_) {
     this->sleep_confirmed_logged_ = true;
     this->diagnostics_dirty_ = true;
     ESP_LOGI(TAG,
-             "Ride Left stopped advertising for %" PRIu32
-             " s; armed to reconnect on its next advertisement",
-             this->idle_policy_.config().sleep_confirm_ms / 1000U);
+             "Ride Left left fast advertising; armed to reconnect as soon as "
+             "it advertises fast again");
   }
 }
 

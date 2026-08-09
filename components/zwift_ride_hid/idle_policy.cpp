@@ -67,6 +67,14 @@ bool RideIdlePolicy::on_advertisement(uint32_t now) {
 
 void RideIdlePolicy::record_burst_sighting_(uint32_t now) {
   const uint8_t capacity = this->burst_capacity_();
+  // Collapse the same advertising event seen on more than one channel, so a
+  // single slow-phase event cannot look like a fast burst.
+  if (this->burst_length_ != 0 &&
+      static_cast<uint32_t>(now - this->burst_times_[this->burst_length_ - 1]) <
+          this->config_.burst_min_spacing_ms) {
+    this->burst_times_[this->burst_length_ - 1] = now;
+    return;
+  }
   if (this->burst_length_ < capacity) {
     this->burst_times_[this->burst_length_++] = now;
     return;

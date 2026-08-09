@@ -24,18 +24,28 @@ struct RideIdleConfig {
 
   /** Silence that proves the controller has left fast advertising.
    *
-   * Ride Left does not stop advertising when released; it ramps its interval
-   * out over minutes on the way to sleep. Once a gap this long appears the
-   * controller is definitively no longer in fast mode, and it stays latched
-   * for the rest of the suppression. It only has to happen once, early, and
-   * the ramp produces it without any user action.
+   * Ride Left does not stop advertising when released. Measured on hardware it
+   * holds ~344 ms for about two minutes (worst observed gap 2233 ms), drops to
+   * a ~6 s interval (gaps 5.4-7.3 s), then stops near three minutes. This sits
+   * between those two regimes, so it latches as soon as the slow phase starts
+   * and cannot be reached by missed packets during the fast phase.
    */
-  uint32_t slow_gap_ms{10UL * 1000UL};
+  uint32_t slow_gap_ms{5000};
 
   /// Sightings within wake_burst_window_ms that together mean "advertising
-  /// fast again", which only a freshly woken or rebooted controller does.
-  uint8_t wake_burst_count{4};
-  uint32_t wake_burst_window_ms{2000};
+  /// fast again", which only a freshly woken or rebooted controller does. The
+  /// slow phase cannot produce these: three spaced sightings need at least
+  /// 12 s there.
+  uint8_t wake_burst_count{3};
+  uint32_t wake_burst_window_ms{3000};
+
+  /** Ignore sightings closer together than this when counting a burst.
+   *
+   * One advertising event is often seen twice a few milliseconds apart, from
+   * different channels. Counting both would let a single slow-phase event
+   * masquerade as fast advertising.
+   */
+  uint32_t burst_min_spacing_ms{100};
 };
 
 /// Most sightings the burst detector ever needs to remember.
