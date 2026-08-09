@@ -38,6 +38,26 @@ target_compile_definitions(
 target_compile_features(zwift_ride_hid_ride_client_tests PRIVATE cxx_std_17)
 target_compile_options(zwift_ride_hid_ride_client_tests PRIVATE -Wall -Wextra -Werror)
 
+add_executable(
+  zwift_ride_hid_hid_keyboard_tests
+  hid_keyboard_tests.cpp
+  fakes/fake_ble.cpp
+  fakes/millis.cpp
+  "${PROJECT_ROOT}/components/zwift_ride_hid/hid_keyboard.cpp"
+)
+
+target_include_directories(
+  zwift_ride_hid_hid_keyboard_tests PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/fakes"
+  "${PROJECT_ROOT}"
+)
+target_compile_definitions(
+  zwift_ride_hid_hid_keyboard_tests PRIVATE USE_ESP32 USE_ESP32_FRAMEWORK_ESP_IDF
+)
+target_compile_features(zwift_ride_hid_hid_keyboard_tests PRIVATE cxx_std_17)
+target_compile_options(zwift_ride_hid_hid_keyboard_tests PRIVATE -Wall -Wextra -Werror)
+
 enable_testing()
 add_test(NAME zwift_ride_hid_host_tests COMMAND zwift_ride_hid_host_tests)
 add_test(NAME zwift_ride_hid_ride_client_tests COMMAND zwift_ride_hid_ride_client_tests)
+add_test(NAME zwift_ride_hid_hid_keyboard_tests COMMAND zwift_ride_hid_hid_keyboard_tests)

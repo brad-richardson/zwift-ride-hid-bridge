@@ -112,3 +112,107 @@ esp_err_t esp_ble_gattc_register_for_notify(esp_gatt_if_t, esp_bd_addr_t, uint16
   s.registered_notify_handles.push_back(handle);
   return ESP_OK;
 }
+
+// --- GATT server + GAP fakes ------------------------------------------------
+
+#include "esp_gap_ble_api.h"
+#include "esp_gatts_api.h"
+#include "esphome/components/esp32_ble/ble.h"
+
+namespace esphome::esp32_ble {
+ESP32BLE *global_ble = nullptr;
+}  // namespace esphome::esp32_ble
+
+esp_err_t esp_ble_gatts_app_register(uint16_t) {
+  auto &s = fake_ble::state();
+  if (s.gatts_app_register_result != ESP_OK)
+    return s.gatts_app_register_result;
+  s.app_registers++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gatts_create_service(esp_gatt_if_t, esp_gatt_srvc_id_t *, uint16_t) {
+  auto &s = fake_ble::state();
+  if (s.gatts_create_service_result != ESP_OK)
+    return s.gatts_create_service_result;
+  s.services_created++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gatts_add_included_service(uint16_t, uint16_t) {
+  fake_ble::state().included_services++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gatts_add_char(uint16_t, esp_bt_uuid_t *, esp_gatt_perm_t,
+                                 esp_gatt_char_prop_t, esp_attr_value_t *,
+                                 esp_attr_control_t *) {
+  auto &s = fake_ble::state();
+  if (s.gatts_add_char_result != ESP_OK)
+    return s.gatts_add_char_result;
+  s.characteristics_added++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gatts_add_char_descr(uint16_t, esp_bt_uuid_t *, esp_gatt_perm_t,
+                                       esp_attr_value_t *, esp_attr_control_t *) {
+  fake_ble::state().descriptors_added++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gatts_start_service(uint16_t) {
+  auto &s = fake_ble::state();
+  if (s.gatts_start_service_result != ESP_OK)
+    return s.gatts_start_service_result;
+  s.services_started++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gatts_send_indicate(esp_gatt_if_t, uint16_t, uint16_t, uint16_t value_len,
+                                      uint8_t *value, bool) {
+  auto &s = fake_ble::state();
+  if (s.gatts_send_indicate_result != ESP_OK)
+    return s.gatts_send_indicate_result;
+  s.hid_reports.emplace_back(value, value + value_len);
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gatts_set_attr_value(uint16_t attr_handle, uint16_t length,
+                                       const uint8_t *value) {
+  fake_ble::state().attribute_writes.emplace_back(
+      attr_handle, std::vector<uint8_t>(value, value + length));
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gap_set_device_name(const char *name) {
+  fake_ble::state().device_name = name;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gap_set_security_param(esp_ble_sm_param_t, void *, uint8_t) { return ESP_OK; }
+
+esp_err_t esp_ble_gap_disconnect(esp_bd_addr_t) {
+  fake_ble::state().peer_disconnects++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gap_stop_advertising() {
+  auto &s = fake_ble::state();
+  if (s.gap_stop_advertising_result != ESP_OK)
+    return s.gap_stop_advertising_result;
+  s.advertising_stops++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_gap_security_rsp(esp_bd_addr_t, bool) {
+  fake_ble::state().security_responses++;
+  return ESP_OK;
+}
+
+esp_err_t esp_ble_passkey_reply(esp_bd_addr_t, bool, uint32_t) { return ESP_OK; }
+esp_err_t esp_ble_confirm_reply(esp_bd_addr_t, bool) { return ESP_OK; }
+
+esp_err_t esp_ble_set_encryption(esp_bd_addr_t, esp_ble_sec_act_t) {
+  fake_ble::state().encryption_requests++;
+  return ESP_OK;
+}
