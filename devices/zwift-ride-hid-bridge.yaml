@@ -139,19 +139,21 @@ zwift_ride_hid:
     # TEMPORARY: shortened from 15min to make the idle path testable in one
     # sitting. Restore 15min once the timings below are settled.
     disconnect_after: 5min
-    # A just-released controller keeps advertising, so the bridge waits for a
-    # gap this long before treating the next advertisement as a genuine wake.
+    # OBSERVATION MODE. Hardware showed Ride Left does not hold a steady
+    # advertising rate after release: it backs off progressively, stretching
+    # from ~325 ms to 2.2 s, 3.2 s, 4.8 s and 5.4 s over about two minutes on
+    # the way to sleep. A 5 s threshold was crossed by that ramp and
+    # reconnected into a still-awake controller.
     #
-    # PROVISIONAL. Hardware showed Ride Left advertising continuously for at
-    # least nine minutes after release, so a real power-off is currently the
-    # only way to produce a gap. The right value is a few multiples of the
-    # observed advertising interval, which `debug_advertisements` measures;
-    # too short and a missed advertisement is mistaken for sleep, which
-    # reconnects straight back into an awake controller.
-    sleep_confirmation: 5s
-    # Safety net for a controller that never stops advertising: reconnect
-    # anyway rather than staying offline until the next reboot.
-    max_suppression: 60min
+    # No fixed gap threshold can separate "backing off" from "asleep", so this
+    # value is deliberately set beyond any plausible gap to suppress the
+    # re-arm entirely while the full backoff curve is recorded. The
+    # `armed to reconnect` log line then marks the moment advertising actually
+    # stopped. Use the Reconnect Ride Controllers button to recover.
+    sleep_confirmation: 10min
+    # Disabled for the same reason: the cap would otherwise end the
+    # observation before the controllers finish going to sleep.
+    max_suppression: 0s
     # A connected keyboard makes iPadOS hide its on-screen keyboard, so the
     # bonded host is released for the duration of the idle period.
     release_hid: true
