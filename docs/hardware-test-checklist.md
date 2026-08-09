@@ -8,7 +8,7 @@ Record the tested full Git SHA, ESPHome version, controller firmware versions, i
 
 - [ ] Confirm the Device Builder/tooling version is ESPHome `2026.7.4`.
 - [ ] Copy the reference YAML, add a strong unique `ota_password`, and keep all fixture credentials out of the installed device.
-- [ ] Identify Ride Left by manufacturer ID `0x094A`, device ID `8`; store its MAC as `ride_left_mac` without committing it.
+- [ ] Leave the reference all-zero BLE-client sentinel in place and confirm logs auto-select a device only when service UUID `FC82`, manufacturer/company ID `0x094A`, and Ride-left device ID `8` are all present.
 - [ ] Close Zwift, BikeControl, and other apps that could hold the controllers' host connection.
 - [ ] Verify USB serial logs and the ability to reflash before depending on OTA.
 - [ ] Compile the exact full commit SHA intended for the device; record RAM and flash use.
@@ -27,6 +27,7 @@ Treat exact LED timing as diagnostic rather than a public API until it has been 
 ## Dual-role BLE and first pairing
 
 - [ ] Power Ride Left and Right. Confirm the ESP32 connects only to Left and receives tunneled input from both halves.
+- [ ] Confirm Ride Right (`0x094A`, device ID `7`), an FC82 advertisement without the matching manufacturer tuple, and a matching manufacturer tuple without FC82 do not trigger selection.
 - [ ] Confirm the bridge discovers the FC82 service, subscribes to async notifications, and successfully writes ASCII `RideOn`.
 - [ ] With the Ride link still ready, find `Zwift Ride KB` in iPadOS Bluetooth settings and pair it.
 - [ ] Confirm encrypted HID input works in Notes and that bonding survives an ESP32 reboot without erasing NVS.

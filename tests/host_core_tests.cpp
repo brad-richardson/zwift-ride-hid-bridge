@@ -10,6 +10,7 @@
 
 #include "components/zwift_ride_hid/input_state.h"
 #include "components/zwift_ride_hid/keymap.h"
+#include "components/zwift_ride_hid/ride_discovery.h"
 #include "components/zwift_ride_hid/ride_protocol.h"
 
 namespace bridge = esphome::zwift_ride_hid;
@@ -591,6 +592,29 @@ void test_report_modifiers_and_six_key_overflow() {
             bridge::build_keyboard_report(0, default_map, nullptr));
 }
 
+void test_ride_left_manufacturer_discriminator() {
+  const uint8_t ride_left[] = {8, 0xAA, 0xBB};
+  const uint8_t ride_right[] = {7, 0xAA, 0xBB};
+  const uint8_t extended_left[] = {8, 0xAA, 0xBB, 0x01};
+
+  EXPECT_TRUE(bridge::is_zwift_ride_left_manufacturer_data(
+      bridge::kZwiftCompanyId, ride_left, sizeof(ride_left)));
+  EXPECT_TRUE(bridge::is_zwift_ride_left_advertisement(
+      true, bridge::kZwiftCompanyId, ride_left, sizeof(ride_left)));
+  EXPECT_TRUE(bridge::is_zwift_ride_left_manufacturer_data(
+      bridge::kZwiftCompanyId, extended_left, sizeof(extended_left)));
+  EXPECT_FALSE(bridge::is_zwift_ride_left_manufacturer_data(
+      bridge::kZwiftCompanyId, ride_right, sizeof(ride_right)));
+  EXPECT_FALSE(bridge::is_zwift_ride_left_manufacturer_data(
+      0x004C, ride_left, sizeof(ride_left)));
+  EXPECT_FALSE(bridge::is_zwift_ride_left_manufacturer_data(
+      bridge::kZwiftCompanyId, nullptr, 0));
+  EXPECT_FALSE(bridge::is_zwift_ride_left_manufacturer_data(
+      bridge::kZwiftCompanyId, ride_left, 0));
+  EXPECT_FALSE(bridge::is_zwift_ride_left_advertisement(
+      false, bridge::kZwiftCompanyId, ride_left, sizeof(ride_left)));
+}
+
 using TestFunction = void (*)();
 
 void run_test(const char *name, TestFunction function) {
@@ -614,6 +638,7 @@ int main() {
   run_test("default and diagnostic keymaps", test_default_and_diagnostic_keymaps);
   run_test("report holds, duplicates, and release", test_report_holds_chords_duplicates_and_release);
   run_test("report modifiers and 6KRO overflow", test_report_modifiers_and_six_key_overflow);
+  run_test("Ride Left manufacturer discriminator", test_ride_left_manufacturer_discriminator);
 
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed across " << tests_run << " tests\n";

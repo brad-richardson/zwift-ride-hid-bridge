@@ -49,6 +49,9 @@ void ZwiftRideHid::setup() {
 
   this->ride_client_.set_ble_client_parent(this->parent());
   this->ride_client_.set_listener(this);
+  this->selected_ride_address_ = this->parent()->get_address();
+  this->auto_discover_ride_ = this->selected_ride_address_ == 0;
+  this->ride_address_selected_ = !this->auto_discover_ride_;
   this->hid_keyboard_.set_parent(this->ble_parent_);
   if (!this->hid_keyboard_.begin(this->hid_name_)) {
     ESP_LOGE(TAG, "Could not schedule the HID keyboard service");
@@ -63,7 +66,15 @@ void ZwiftRideHid::setup() {
   clear_keyboard_report(&this->pending_report_);
   this->published_state_ = BridgeState::STARTING;
   this->diagnostics_dirty_ = true;
-  ESP_LOGI(TAG, "Bridge initialized; waiting for Ride Left and a HID host");
+  if (this->auto_discover_ride_) {
+    ESP_LOGI(TAG,
+             "Bridge initialized; auto-discovering Ride Left and waiting for "
+             "a HID host");
+  } else {
+    ESP_LOGI(TAG, "Bridge initialized; using pinned Ride Left %s and waiting "
+                  "for a HID host",
+             this->parent()->address_str());
+  }
 }
 
 float ZwiftRideHid::get_setup_priority() const { return setup_priority::AFTER_BLUETOOTH; }
@@ -121,8 +132,74 @@ void ZwiftRideHid::dump_config() {
   ESP_LOGCONFIG(TAG, "  Connect haptic: %s", YESNO(this->connect_haptic_));
   ESP_LOGCONFIG(TAG, "  Button haptic: %s", YESNO(this->button_haptic_));
   ESP_LOGCONFIG(TAG, "  Debug capture: %s", YESNO(this->debug_capture_));
+  ESP_LOGCONFIG(TAG, "  Ride selection: %s",
+                this->auto_discover_ride_ ? "automatic" : "pinned address");
+  if (this->ride_address_selected_) {
+    ESP_LOGCONFIG(TAG, "  Selected Ride Left: %s", this->parent()->address_str());
+  }
   LOG_PIN("  Status LED: ", this->status_led_);
   ESP_LOGCONFIG(TAG, "  Runtime state: %s", bridge_state_name_(this->bridge_state_()));
+}
+
+bool ZwiftRideHid::parse_device(
+    const esp32_ble_tracker::ESPBTDevice &device) {
+  if (!this->auto_discover_ride_ || this->ride_address_selected_ ||
+      this->ota_active_ || this->stopped_ || this->parent() == nullptr ||
+      this->parent()->state() != esp32_ble_tracker::ClientState::IDLE)
+    return false;
+
+  const auto ride_service =
+      esp32_ble::ESPBTUUID::from_uint16(kZwiftRideServiceUuid);
+  bool advertises_ride_service = false;
+  for (const auto &uuid : device.get_service_uuids()) {
+    if (uuid == ride_service) {
+      advertises_ride_service = true;
+      break;
+    }
+  }
+  bool is_ride_left = false;
+  size_t manufacturer_payload_length = 0;
+  for (const auto &manufacturer_data : device.get_manufacturer_datas()) {
+    const auto uuid = manufacturer_data.uuid.get_uuid();
+    if (uuid.len != ESP_UUID_LEN_16)
+      continue;
+    if (is_zwift_ride_left_advertisement(
+            advertises_ride_service, uuid.uuid.uuid16,
+            manufacturer_data.data.data(), manufacturer_data.data.size())) {
+      is_ride_left = true;
+      manufacturer_payload_length = manufacturer_data.data.size();
+      break;
+    }
+  }
+  if (!is_ride_left)
+    return false;
+
+  const uint64_t discovered_address = device.address_uint64();
+  if (discovered_address == 0)
+    return false;
+
+  // Parsed-advertisement listeners run before clients in ESPHome 2026.7.4.
+  // Selecting the address here lets the stock BLEClient consume this same
+  // scan result, transition to DISCOVERED, and retain ownership of scan stop,
+  // connection, GATT callbacks, and reconnect behavior.
+  this->selected_ride_address_ = discovered_address;
+  this->parent()->set_address(this->selected_ride_address_);
+  this->parent()->set_remote_addr_type(device.get_address_type());
+  this->ride_address_selected_ = true;
+
+  char address[MAC_ADDRESS_PRETTY_BUFFER_SIZE];
+  ESP_LOGI(TAG, "Auto-discovered Ride Left %s (name='%s', RSSI=%d)",
+           device.address_str_to(address), device.get_name().c_str(),
+           device.get_rssi());
+  if (manufacturer_payload_length !=
+      kZwiftRideManufacturerPayloadLength) {
+    ESP_LOGW(TAG,
+             "Ride Left manufacturer payload has unexpected length %u "
+             "(expected %u); accepting the known device ID",
+             static_cast<unsigned>(manufacturer_payload_length),
+             static_cast<unsigned>(kZwiftRideManufacturerPayloadLength));
+  }
+  return true;
 }
 
 void ZwiftRideHid::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,

@@ -15,10 +15,9 @@ The configuration reuses the secret names from the supplied ESPHome base configu
 
 The user's Device Builder also contains `wifi_ssid` and `wifi_password`, but the supplied working base uses `ssid` and `password`; the reference YAML follows that base. Rename the two `!secret` references if the intended network is stored under the `wifi_*` pair instead.
 
-Add two device-specific values:
+Add one device-specific value:
 
-- `ota_password` — a strong password used only for native ESPHome OTA;
-- `ride_left_mac` — Ride Left's BLE address. It is configuration rather than a credential, but keeping it in secrets leaves tracked YAML reusable.
+- `ota_password` — a strong password used only for native ESPHome OTA.
 
 For local builds:
 
@@ -28,7 +27,9 @@ cp devices/secrets.example.yaml devices/secrets.yaml
 
 Replace every fixture value. `devices/secrets.yaml` is ignored by Git. The tracked example uses deliberately non-secret values that are syntactically suitable for CI; never flash those values.
 
-Both controllers normally advertise as `Zwift SF2`. Identify Ride Left by manufacturer ID `0x094A`, device ID `8` (Ride Right is device ID `7`). Close Zwift, BikeControl, and other possible central clients while discovering or testing it.
+Both controllers normally advertise as `Zwift SF2`. The component automatically selects the first advertisement containing service UUID `FC82`, manufacturer/company ID `0x094A`, and device ID `8` (Ride Right is device ID `7`). It locks that address for the rest of the boot. Close Zwift, BikeControl, and other possible central clients while discovering or testing it.
+
+The reference `ble_client` uses `00:00:00:00:00:00` as an explicit auto-discovery sentinel because ESPHome's stock client schema requires an address. At a venue or home where more than one Ride Left could be visible, replace the sentinel with the intended controller's real MAC. A nonzero address disables automatic selection and preserves stock ESPHome pinned-client behavior.
 
 ## Local repository build
 

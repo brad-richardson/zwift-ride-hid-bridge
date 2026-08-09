@@ -126,7 +126,9 @@ The external-component schema is deliberately small and validated by ESPHome:
 ```yaml
 ble_client:
   - id: ride_left
-    mac_address: !secret ride_left_mac
+    # ESPHome requires a value; zero asks the bridge to select Ride Left from
+    # its FC82 service plus Zwift manufacturer/device identifiers.
+    mac_address: "00:00:00:00:00:00"
 
 zwift_ride_hid:
   ble_client_id: ride_left
@@ -172,9 +174,9 @@ Acceptance:
 
 - reference YAML validates and compiles in CI;
 - first USB flash boots, joins Wi-Fi, appears in Device Builder, and accepts a no-op OTA update;
-- no credentials or device addresses enter git.
+- no credentials or real device addresses enter git.
 
-The feature-complete candidate compiles on ESPHome 2026.7.4 / ESP-IDF 5.5.5. Its 1,277,751-byte image uses 140,355 bytes of DIRAM (41.1%) and 32.5% of the 3,932,160-byte OTA application partition, leaving 68% of that partition free.
+The feature-complete candidate compiles on ESPHome 2026.7.4 / ESP-IDF 5.5.5. With automatic Ride discovery, its 1,278,851-byte image uses 140,387 bytes of DIRAM (41.1%) and 32.5% of the 3,932,160-byte OTA application partition, leaving 67% of that partition free.
 
 ### 1. Dual-role feasibility (implemented, hard hardware gate)
 
@@ -338,7 +340,7 @@ Run the full 45-minute FireRed ride, including one controller sleep/wake. Also r
 These do not block repository implementation, but they do block the first device test:
 
 - confirmation that Device Builder can use the repository pin, ESPHome `2026.7.4`;
-- the Ride Left MAC address (stock `ble_client` requires it; a device-ID-aware discovery helper is deferred);
+- hardware confirmation that automatic discovery selects only Ride Left and reconnects to the per-boot locked address;
 - confirmation that the documented upper/middle controls match the printed LS1/LS2 and RS1/RS2 numbering;
 - which sign of each analog lever should be considered steering vs braking on the physical bike.
 
@@ -348,7 +350,7 @@ Known hardware/configuration facts:
 - user LED GPIO21, active low;
 - ESP-IDF framework;
 - existing Device Builder secrets: `ssid`, `password`, `fallback_password`, and `api_key`;
-- one new required secret: `ota_password`;
+- one new required secret: `ota_password`; no controller address is required for automatic discovery;
 - Wi-Fi output power convention: `8.5db`;
 - native ESPHome OTA, encrypted API, captive-portal fallback, uptime/Wi-Fi diagnostics, and restart button.
 

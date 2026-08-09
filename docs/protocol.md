@@ -10,6 +10,10 @@ Only the **left** Ride controller needs a BLE connection. The right controller e
 - manufacturer ID `0x094A`
 - Ride-left device ID `8` (Ride-right is `7`)
 
+The reference configuration uses an all-zero stock-client address as an auto-discovery sentinel. A parsed-advertisement listener requires all three identifiers above, selects the address and address type before ESPHome's stock client processes the same scan result, and locks that selection for the boot. A configured nonzero address remains an explicit pin. The advertised name is corroborating information only because both halves use the same value, while RSSI is not an identity signal.
+
+The documented manufacturer-specific field contains the little-endian company ID, the one-byte device ID, and the last two address bytes. The component accepts future payload extensions after the known device ID but logs a warning when the payload following the company ID is not the documented three bytes.
+
 The current handshake writes ASCII `RideOn` to the sync-RX characteristic, then subscribes to async notifications:
 
 | Purpose | UUID |

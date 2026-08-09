@@ -9,7 +9,7 @@ The project is downstream of [Fuenfachsen/Zword_ZwiftRide-to-BLE-Keyboard](https
 ## What is implemented
 
 - ESPHome owns Wi-Fi, encrypted Home Assistant API access, native OTA, safe mode, scanning, and the single Bluedroid lifecycle.
-- The stock ESPHome BLE client connects to **Ride Left**. Ride Left tunnels Ride Right input, so the bridge does not consume a third controller connection.
+- The component auto-discovers **Ride Left** using Zwift's FC82 service, company ID, and Ride-left device ID, then hands the selected address to ESPHome's stock BLE client. Ride Left tunnels Ride Right input, so the bridge does not consume a third controller connection.
 - The component discovers the FC82 characteristics, subscribes to notifications, writes `RideOn`, and can send the controller's haptic command.
 - A bounded protobuf decoder accepts both observed analog-record layouts, decodes all 16 known button bits and four signed analog channels, and rejects malformed frames transactionally.
 - Threshold plus hysteresis turns both polarities of both active levers into four independent logical inputs.
@@ -23,9 +23,8 @@ This is still an unproven firmware candidate. In particular, a successful compil
 ## Quick start
 
 1. Clone this repository and install [uv](https://docs.astral.sh/uv/).
-2. Copy `devices/secrets.example.yaml` to the ignored `devices/secrets.yaml` and replace its fixture values.
-3. Put the MAC address of **Ride Left** in `ride_left_mac`. Both halves advertise as `Zwift SF2`; Ride Left is manufacturer ID `0x094A`, device ID `8`.
-4. Validate and compile:
+2. Copy `devices/secrets.example.yaml` to the ignored `devices/secrets.yaml` and replace its fixture values. No controller address is required: both halves advertise as `Zwift SF2`, and the bridge selects Left using service UUID `FC82`, manufacturer/company ID `0x094A`, and device ID `8` (`7` is Right).
+3. Validate and compile:
 
    ```console
    uv sync --locked
@@ -33,7 +32,7 @@ This is still an unproven firmware candidate. In particular, a successful compil
    uv run --locked esphome compile devices/zwift-ride-hid-bridge.yaml
    ```
 
-5. Do the first installation over USB. Pair `Zwift Ride KB` in iPadOS Bluetooth settings only after serial logs show that the bridge has booted normally.
+4. Do the first installation over USB. Pair `Zwift Ride KB` in iPadOS Bluetooth settings only after serial logs show that the bridge has booted normally.
 
 The checked-in device YAML deliberately uses a local external-component path so CI and repository checkouts compile the code being reviewed. For ESPHome Device Builder, replace only that block with the immutable Git form in [devices/README.md](devices/README.md), using a reviewed full 40-character commit SHA.
 
@@ -47,6 +46,7 @@ See [the complete mapping table](docs/delta-mapping.md) for every button—inclu
 
 - Close Zwift, BikeControl, and other apps that may already hold the controllers' host connection.
 - Power both Ride controllers. The bridge connects only to Ride Left; Right normally joins through Left.
+- Automatic selection locks the first exact Ride Left match for that boot. If more than one Ride setup is in radio range, replace the all-zero `ble_client` address with the intended Left controller's real MAC to pin it explicitly.
 - Pair the advertised `Zwift Ride KB` once from the iPad. Bond data is stored in ESP32 NVS, so normal application OTA updates should not require re-pairing. Erasing flash/NVS will.
 - Short taps of the two orange logo/power controls emit Select and Start. A long hold is still the controller power gesture and may disconnect it.
 - Controller loss sends an empty report while the HID link is available; either link loss clears the bridge's internal key state so a later session cannot inherit held keys. ESPHome then retries the Ride link and the HID service returns to advertising. These paths are implemented but remain hardware-untested.

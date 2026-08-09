@@ -7,6 +7,7 @@ from esphome.components import (
     binary_sensor,
     ble_client,
     esp32_ble,
+    esp32_ble_tracker,
     ota,
     sensor,
     text_sensor,
@@ -146,7 +147,8 @@ CONFIG_SCHEMA = cv.All(
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
-    .extend(ble_client.BLE_CLIENT_SCHEMA),
+    .extend(ble_client.BLE_CLIENT_SCHEMA)
+    .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA),
     _validate_thresholds,
     cv.only_with_framework("esp-idf"),
 )
@@ -165,6 +167,7 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
+    await esp32_ble_tracker.register_ble_device(var, config)
 
     # BLEClientNode already receives GAP events via its BLEClient parent. Registering
     # it again with the process-wide broker would deliver every GAP event twice.

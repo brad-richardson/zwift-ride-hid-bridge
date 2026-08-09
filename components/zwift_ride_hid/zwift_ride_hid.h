@@ -21,12 +21,14 @@
 #include "input_state.h"
 #include "keymap.h"
 #include "ride_client.h"
+#include "ride_discovery.h"
 #include "ride_protocol.h"
 
 namespace esphome::zwift_ride_hid {
 
 class ZwiftRideHid : public Component,
                      public ble_client::BLEClientNode,
+                     public esp32_ble_tracker::ESPBTDeviceListener,
                      public RideClientListener
 #ifdef USE_OTA_STATE_LISTENER
     ,
@@ -40,6 +42,8 @@ class ZwiftRideHid : public Component,
   float get_setup_priority() const override;
   void on_shutdown() override;
   void on_safe_shutdown() override;
+
+  bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override;
 
   void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                            esp_ble_gattc_cb_param_t *param) override;
@@ -133,6 +137,9 @@ class ZwiftRideHid : public Component,
   bool ota_active_{false};
   bool stopped_{false};
   bool diagnostics_dirty_{true};
+  bool auto_discover_ride_{false};
+  bool ride_address_selected_{false};
+  uint64_t selected_ride_address_{0};
   uint32_t reconnect_count_{0};
   uint32_t invalid_frame_count_{0};
   uint32_t hid_report_count_{0};

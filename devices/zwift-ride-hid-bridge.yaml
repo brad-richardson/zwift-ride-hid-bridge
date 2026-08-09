@@ -91,7 +91,10 @@ esp32_ble_tracker:
     continuous: true
 
 ble_client:
-  - mac_address: !secret ride_left_mac
+  # The all-zero address enables zwift_ride_hid's exact Ride Left discovery
+  # filter. Replace it with a real MAC only to pin one controller in a venue
+  # where more than one Ride setup is visible.
+  - mac_address: "00:00:00:00:00:00"
     id: ride_left
     auto_connect: true
 
