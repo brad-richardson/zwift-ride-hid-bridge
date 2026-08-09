@@ -814,6 +814,13 @@ void ZwiftRideHid::publish_diagnostics_() {
       this->idle_policy_.has_advertisement())
     this->advertisement_age_sensor_->publish_state(
         this->idle_policy_.advertisement_age_ms(now) / 1000.0f);
+  // The quantity both re-arm thresholds compare against. Publishing it is what
+  // makes a wrong threshold visible at a glance instead of only in a capture.
+  if (this->advertising_rate_sensor_ != nullptr) {
+    const uint32_t rate = this->idle_policy_.advertising_rate_ms();
+    if (rate != 0)
+      this->advertising_rate_sensor_->publish_state(rate);
+  }
   if (this->expose_raw_) {
     if (this->left_lever_sensor_ != nullptr && this->input_state_.has_analog(0))
       this->left_lever_sensor_->publish_state(this->input_state_.analog(0));

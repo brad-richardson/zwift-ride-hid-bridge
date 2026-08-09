@@ -180,6 +180,11 @@ zwift_ride_hid:
       name: Ride Advertising
     advertisement_age:
       name: Ride Advertisement Age
+    # What the reconnect logic actually measures: ~196 ms while the controller
+    # is awake, ~640 ms while winding down. If a reconnect misbehaves, this is
+    # the reading that says whether the thresholds are wrong.
+    advertising_rate:
+      name: Ride Advertising Rate
     reconnect_count:
       name: Ride Reconnect Count
     invalid_frame_count:

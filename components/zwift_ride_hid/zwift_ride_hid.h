@@ -133,6 +133,9 @@ class ZwiftRideHid : public Component,
   void set_advertisement_age_sensor(sensor::Sensor *sensor) {
     this->advertisement_age_sensor_ = sensor;
   }
+  void set_advertising_rate_sensor(sensor::Sensor *sensor) {
+    this->advertising_rate_sensor_ = sensor;
+  }
   void set_left_lever_sensor(sensor::Sensor *sensor) { this->left_lever_sensor_ = sensor; }
   void set_right_lever_sensor(sensor::Sensor *sensor) { this->right_lever_sensor_ = sensor; }
 
@@ -221,6 +224,7 @@ class ZwiftRideHid : public Component,
   binary_sensor::BinarySensor *ready_sensor_{nullptr};
   binary_sensor::BinarySensor *ride_advertising_sensor_{nullptr};
   sensor::Sensor *advertisement_age_sensor_{nullptr};
+  sensor::Sensor *advertising_rate_sensor_{nullptr};
   text_sensor::TextSensor *state_text_sensor_{nullptr};
   sensor::Sensor *reconnect_count_sensor_{nullptr};
   sensor::Sensor *invalid_frame_count_sensor_{nullptr};

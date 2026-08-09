@@ -27,6 +27,7 @@ DEPENDENCIES = ["esp32", "ble_client", "esp32_ble"]
 AUTO_LOAD = ["binary_sensor", "sensor", "text_sensor"]
 
 CONF_ADVERTISEMENT_AGE = "advertisement_age"
+CONF_ADVERTISING_RATE = "advertising_rate"
 CONF_ANALOG_LEVERS = "analog_levers"
 CONF_BUTTON_FEEDBACK = "button_feedback"
 CONF_CONNECT_CONFIRMATION = "connect_confirmation"
@@ -159,6 +160,14 @@ DIAGNOSTICS_SCHEMA = cv.Schema(
         cv.Optional(CONF_ADVERTISEMENT_AGE): sensor.sensor_schema(
             unit_of_measurement=UNIT_SECOND,
             accuracy_decimals=1,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        # The mean gap the re-arm thresholds are compared against. Roughly
+        # 196 ms while the controller is awake and 640 ms while winding down.
+        cv.Optional(CONF_ADVERTISING_RATE): sensor.sensor_schema(
+            unit_of_measurement="ms",
+            accuracy_decimals=0,
             state_class=STATE_CLASS_MEASUREMENT,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         ),
@@ -352,6 +361,7 @@ async def to_code(config):
             "set_ride_advertising_sensor",
         ),
         CONF_ADVERTISEMENT_AGE: (sensor.new_sensor, "set_advertisement_age_sensor"),
+        CONF_ADVERTISING_RATE: (sensor.new_sensor, "set_advertising_rate_sensor"),
         CONF_STATE: (text_sensor.new_text_sensor, "set_state_text_sensor"),
         CONF_RECONNECT_COUNT: (sensor.new_sensor, "set_reconnect_count_sensor"),
         CONF_INVALID_FRAME_COUNT: (sensor.new_sensor, "set_invalid_frame_count_sensor"),
