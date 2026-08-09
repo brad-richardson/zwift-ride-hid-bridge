@@ -168,6 +168,8 @@ async def to_code(config):
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
     await esp32_ble_tracker.register_ble_device(var, config)
+    tracker = await cg.get_variable(config[esp32_ble_tracker.CONF_ESP32_BLE_ID])
+    cg.add(var.set_ble_tracker(tracker))
 
     # BLEClientNode already receives GAP events via its BLEClient parent. Registering
     # it again with the process-wide broker would deliver every GAP event twice.

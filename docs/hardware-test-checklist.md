@@ -30,6 +30,7 @@ Treat exact LED timing as diagnostic rather than a public API until it has been 
 - [ ] Power Ride Left and Right. Confirm the ESP32 connects only to Left and receives tunneled input from both halves.
 - [ ] Confirm Ride Right (`0x094A`, device ID `7`), an FC82 advertisement without the matching manufacturer tuple, and a matching manufacturer tuple without FC82 do not trigger selection.
 - [ ] Confirm the bridge discovers the FC82 service, subscribes to async notifications, and successfully writes ASCII `RideOn`.
+- [ ] With `esp32_ble_tracker` debug logging temporarily enabled, confirm continuous scanning stops during Ride connection/setup, remains stopped while ready, and resumes only after the stock client finishes disconnecting and returns to idle. Begin one OTA while a scan is starting and confirm the late `RUNNING` transition is stopped rather than continuing through the update.
 - [ ] Confirm `Zwift Ride KB` becomes discoverable only after that handshake, then suppresses advertising again when Ride Left disconnects. If the bonded iPad was already connected, confirm it remains attached with all keys released.
 - [ ] With the Ride link still ready, find `Zwift Ride KB` in iPadOS Bluetooth settings and pair it.
 - [ ] Confirm encrypted HID input works in Notes and that bonding survives an ESP32 reboot without erasing NVS.

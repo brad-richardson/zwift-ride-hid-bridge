@@ -23,7 +23,8 @@ bool reports_equal(const KeyboardReport &left, const KeyboardReport &right) {
 }  // namespace
 
 void ZwiftRideHid::setup() {
-  if (this->ble_parent_ == nullptr || this->parent() == nullptr) {
+  if (this->ble_parent_ == nullptr || this->ble_tracker_ == nullptr ||
+      this->parent() == nullptr) {
     ESP_LOGE(TAG, "BLE parents are not configured");
     this->mark_failed();
     return;
@@ -49,6 +50,7 @@ void ZwiftRideHid::setup() {
 
   this->ride_client_.set_ble_client_parent(this->parent());
   this->ride_client_.set_listener(this);
+  this->ble_tracker_->add_scanner_state_listener(this);
   this->selected_ride_address_ = this->parent()->get_address();
   this->auto_discover_ride_ = this->selected_ride_address_ == 0;
   this->ride_address_selected_ = !this->auto_discover_ride_;
@@ -85,6 +87,7 @@ void ZwiftRideHid::loop() {
     return;
   }
 
+  this->update_scanner_policy_();
   this->ride_client_.loop();
   this->hid_keyboard_.loop();
 
@@ -134,6 +137,8 @@ void ZwiftRideHid::dump_config() {
   ESP_LOGCONFIG(TAG, "  Debug capture: %s", YESNO(this->debug_capture_));
   ESP_LOGCONFIG(TAG, "  Ride selection: %s",
                 this->auto_discover_ride_ ? "automatic" : "pinned address");
+  ESP_LOGCONFIG(TAG,
+                "  Scanner policy: continuous only while Ride client is idle");
   if (this->ride_address_selected_) {
     ESP_LOGCONFIG(TAG, "  Selected Ride Left: %s", this->parent()->address_str());
   }
@@ -200,6 +205,53 @@ bool ZwiftRideHid::parse_device(
              static_cast<unsigned>(kZwiftRideManufacturerPayloadLength));
   }
   return true;
+}
+
+void ZwiftRideHid::update_scanner_policy_() {
+  if (this->ble_tracker_ == nullptr || this->parent() == nullptr ||
+      this->ble_parent_ == nullptr || !this->ble_parent_->is_active())
+    return;
+
+  const bool scan_wanted = this->scanner_wanted_();
+  this->ble_tracker_->set_scan_continuous(scan_wanted);
+
+  const auto scanner_state = this->ble_tracker_->get_scanner_state();
+  if (scan_wanted) {
+    // Direct start is safe only after the stock Ride client has completely
+    // returned to IDLE. This also resumes an OTA abort when no later client
+    // state transition remains to wake ESPHome's scanner state machine.
+    if (scanner_state == esp32_ble_tracker::ScannerState::IDLE)
+      this->ble_tracker_->start_scan();
+    return;
+  }
+
+  // stop_scan() also clears ESPHome's continuous flag. If a start command is
+  // already in flight, leave STARTING alone; on_scanner_state() stops the late
+  // RUNNING transition. Likewise, STOPPING is allowed to finish before an
+  // IDLE client can request another scan.
+  if (scanner_state == esp32_ble_tracker::ScannerState::RUNNING ||
+      scanner_state == esp32_ble_tracker::ScannerState::FAILED)
+    this->ble_tracker_->stop_scan();
+}
+
+bool ZwiftRideHid::scanner_wanted_() {
+  return !this->ota_active_ && !this->stopped_ &&
+         this->parent() != nullptr &&
+         this->parent()->state() == esp32_ble_tracker::ClientState::IDLE;
+}
+
+void ZwiftRideHid::on_scanner_state(
+    esp32_ble_tracker::ScannerState state) {
+  if (state != esp32_ble_tracker::ScannerState::RUNNING ||
+      this->ble_tracker_ == nullptr || this->ble_parent_ == nullptr ||
+      !this->ble_parent_->is_active() || this->scanner_wanted_())
+    return;
+
+  // A scan-start command may already be in flight when OTA/shutdown or a Ride
+  // connection makes scanning undesirable. Stopping from the confirmed
+  // RUNNING transition closes that race even if the normal component loop is
+  // paused by the update path.
+  this->ble_tracker_->stop_scan();
 }
 
 void ZwiftRideHid::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
@@ -358,6 +410,9 @@ void ZwiftRideHid::release_all_(const char *reason) {
 
 void ZwiftRideHid::quiesce_(const char *reason, bool disconnect_ride) {
   this->ride_session_quiesced_ = true;
+  // OTA and shutdown set their flags before entering here. Submit the scanner
+  // stop synchronously; on_scanner_state() catches an in-flight STARTING race.
+  this->update_scanner_policy_();
   this->release_all_(reason);
   this->hid_keyboard_.quiesce();
   // Treat the current Ride session as dead immediately. The physical
@@ -401,8 +456,9 @@ void ZwiftRideHid::on_ota_global_state(ota::OTAState state, float progress, uint
     this->hid_keyboard_.resume();
     this->diagnostics_dirty_ = true;
     ESP_LOGW(TAG,
-             "OTA stopped before completion; Ride scanning resumed with HID "
-             "advertising gated until a fresh handshake");
+             "OTA stopped before completion; Ride scanning will resume after "
+             "the client returns to idle, with HID advertising gated until a "
+             "fresh handshake");
   }
 }
 #endif

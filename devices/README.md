@@ -31,6 +31,8 @@ Both controllers normally advertise as `Zwift SF2`. The component automatically 
 
 The reference `ble_client` uses `00:00:00:00:00:00` as an explicit auto-discovery sentinel because ESPHome's stock client schema requires an address. At a venue or home where more than one Ride Left could be visible, replace the sentinel with the intended controller's real MAC. A nonzero address disables automatic selection and preserves stock ESPHome pinned-client behavior.
 
+The YAML keeps ESPHome's tracker in continuous mode as the disconnected baseline. At runtime the component uses the tracker's public API to stop the global scanner whenever the Ride client leaves `IDLE`, including connection setup and an established session, and restores continuous scanning only after complete disconnect. Do not add a Bluetooth proxy, another BLE client, or advertisement-driven sensors without revisiting this policy because the ESP32 has one shared scanner.
+
 ## Local repository build
 
 Keep the checked-in source block when the YAML and component are in the same clone:

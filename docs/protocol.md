@@ -28,7 +28,9 @@ Input status messages begin with command byte `0x23`, followed by a protobuf pay
 
 The implementation accepts complete notifications up to 128 bytes and performs no heap allocation. It decodes into a temporary value and replaces live state only after the entire packet passes validation, including the required button map.
 
-- field 1: inverse-logic uint32 button bitmap (`0` means pressed)
+- field 1: inverse-logic uint32 button bitmap (`0` means pressed), encoded as
+  a protobuf varint. Each wire byte contributes seven data bits; its high bit
+  is only the continuation flag.
 - analog records have appeared in two wire-compatible semantic layouts and the parser must accept both:
   - published/older layout: field 2 is a length-delimited group containing repeated field-1 analog records;
   - current Zword capture layout: each analog record is a repeated length-delimited field 3 (`0x1A`);
@@ -54,6 +56,21 @@ pressed = (~wire_button_map) & KNOWN_BUTTON_MASK
 
 Never invert unknown/reserved bits into phantom presses.
 
+The varint data bytes must be accumulated before interpreting button masks.
+After the `0x23` command and field tag `0x08`, the first varint byte contributes
+semantic bits 0..6, the second contributes bits 7..13, and the third contributes
+bits 14..20. In particular, the captured Z press begins `23 08 FF FE ...`: the
+cleared low data bit in `FE` is semantic bit 7 (`0x000080`), not byte-aligned
+bit 8 (`0x000100`). Captured field-1 prefixes are:
+
+| State | Notification prefix | Decoded press mask |
+|---|---|---:|
+| Idle | `23 08 FF FF FF FF 0F` | `0x000000` |
+| A | `23 08 EF FF FF FF 0F` | `0x000010` |
+| B | `23 08 DF FF FF FF 0F` | `0x000020` |
+| Y | `23 08 BF FF FF FF 0F` | `0x000040` |
+| Z | `23 08 FF FE FF FF 0F` | `0x000080` |
+
 ## Complete known discrete map
 
 The physical side-button labels are retained because they are easier to verify on hardware. Protocol aliases in parentheses come from the reverse-engineered enum.
@@ -67,17 +84,17 @@ The physical side-button labels are retained because they are easier to verify o
 | `0x000010` | `button_a` | Right: A |
 | `0x000020` | `button_b` | Right: B |
 | `0x000040` | `button_y` | Right: Y |
-| `0x000100` | `button_z` | Right action pad: Z face button |
-| `0x000200` | `left_side_upper` | Left gear shifter, upper (`SHFT_UP_L`) |
-| `0x000400` | `left_side_middle` | Left gear shifter, middle (`SHFT_DN_L`) |
-| `0x000800` | `left_side_lower` | Left drop button, LB (`POWERUP_L`) |
-| `0x001000` | `left_power` | Left orange Zwift-logo/power button (`ONOFF_L`) |
-| `0x002000` | `right_side_upper` | Right gear shifter, upper (`SHFT_UP_R`) |
-| `0x004000` | `right_side_middle` | Right gear shifter, middle (`SHFT_DN_R`) |
-| `0x010000` | `right_side_lower` | Right drop button, RB (`POWERUP_R`) |
-| `0x020000` | `right_power` | Right orange Zwift-logo/power button (`ONOFF_R`) |
+| `0x000080` | `button_z` | Right action pad: Z face button |
+| `0x000100` | `left_side_upper` | Left gear shifter, upper (`SHFT_UP_L`) |
+| `0x000200` | `left_side_middle` | Left gear shifter, middle (`SHFT_DN_L`) |
+| `0x000400` | `left_side_lower` | Left drop button, LB (`POWERUP_L`) |
+| `0x000800` | `left_power` | Left orange Zwift-logo/power button (`ONOFF_L`) |
+| `0x001000` | `right_side_upper` | Right gear shifter, upper (`SHFT_UP_R`) |
+| `0x002000` | `right_side_middle` | Right gear shifter, middle (`SHFT_DN_R`) |
+| `0x004000` | `right_side_lower` | Right drop button, RB (`POWERUP_R`) |
+| `0x008000` | `right_power` | Right orange Zwift-logo/power button (`ONOFF_R`) |
 
-Known mask: `0x037F7F`. Bits 7 and 15 and all higher unlisted bits are currently reserved.
+Known mask: `0x00FFFF`. All higher bits are currently reserved.
 
 Do not conflate the three Z-marked controls: `button_z` is the single right-hand action-pad button, while `left_power` and `right_power` are two separately reported orange Zwift-logo buttons. Upstream Zword observes all three in different bits. Short logo-button taps can therefore be mapped independently; a long hold remains the controllers' power gesture and is not suitable for a hold-heavy emulator action.
 

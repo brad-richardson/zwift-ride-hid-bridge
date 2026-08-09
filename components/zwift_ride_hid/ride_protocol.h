@@ -7,7 +7,9 @@
 namespace esphome::zwift_ride_hid {
 
 constexpr uint8_t kRideInputCommand = 0x23;
-constexpr uint32_t kKnownButtonMask = 0x00037F7FUL;
+// Field 1 is a protobuf varint: each encoded byte contributes seven data bits.
+// The 16 known controls therefore occupy semantic bits 0..15 contiguously.
+constexpr uint32_t kKnownButtonMask = 0x0000FFFFUL;
 constexpr size_t kMaxRideNotificationLength = 128;
 constexpr uint8_t kAnalogChannelCount = 4;
 

@@ -137,7 +137,7 @@ bool report_is_empty(const bridge::KeyboardReport &report) {
 }
 
 void test_direct_layout_and_inverse_mask() {
-  const uint32_t pressed = 0x000001UL | 0x000010UL | 0x004000UL;
+  const uint32_t pressed = 0x000001UL | 0x000010UL | 0x002000UL;
   auto packet_bytes = direct_packet(pressed, {{0, -42}, {1, 55}, {2, -100}, {3, 100}});
 
   bridge::RideInputPacket packet{};
@@ -151,15 +151,52 @@ void test_direct_layout_and_inverse_mask() {
   EXPECT_EQ(-100, packet.analog[2]);
   EXPECT_EQ(100, packet.analog[3]);
 
-  // Reserved bit 7 is active-low too, but must never become a semantic press.
-  auto reserved = packet_prefix(0x000010UL | 0x000080UL);
+  // The first bit after the 16 known controls is active-low too, but must never
+  // become a semantic press.
+  auto reserved = packet_prefix(0x000010UL | 0x010000UL);
   EXPECT_EQ(bridge::RideDecodeStatus::OK,
             bridge::decode_ride_notification(reserved.data(), reserved.size(), &packet));
   EXPECT_EQ(0x000010UL, packet.pressed_buttons);
 }
 
+void test_live_captured_button_varints() {
+  // Live field-1 captures. Protobuf varints contribute seven data bits per
+  // byte, so FF FE ... clears semantic bit 7 (0x80), not bit 8 (0x100).
+  struct CapturedNotification {
+    uint8_t bytes[7];
+    uint32_t expected_pressed;
+  };
+  const CapturedNotification captures[] = {
+      {{0x23, 0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F}, 0x000000UL},
+      {{0x23, 0x08, 0xEF, 0xFF, 0xFF, 0xFF, 0x0F}, 0x000010UL},
+      {{0x23, 0x08, 0xDF, 0xFF, 0xFF, 0xFF, 0x0F}, 0x000020UL},
+      {{0x23, 0x08, 0xBF, 0xFF, 0xFF, 0xFF, 0x0F}, 0x000040UL},
+      {{0x23, 0x08, 0xFF, 0xFE, 0xFF, 0xFF, 0x0F}, 0x000080UL},
+  };
+
+  for (const auto &capture : captures) {
+    bridge::RideInputPacket packet{};
+    EXPECT_EQ(bridge::RideDecodeStatus::OK,
+              bridge::decode_ride_notification(capture.bytes,
+                                               sizeof(capture.bytes), &packet));
+    EXPECT_EQ(static_cast<uint32_t>(~capture.expected_pressed),
+              packet.wire_button_map);
+    EXPECT_EQ(capture.expected_pressed, packet.pressed_buttons);
+  }
+
+  bridge::InputState state;
+  bridge::RideInputPacket z_packet{};
+  EXPECT_EQ(bridge::RideDecodeStatus::OK,
+            bridge::decode_ride_notification(captures[4].bytes,
+                                             sizeof(captures[4].bytes),
+                                             &z_packet));
+  const auto edges = state.apply(z_packet);
+  EXPECT_EQ(bridge::action_mask(bridge::InputAction::BUTTON_Z), edges.pressed);
+  EXPECT_TRUE(state.active(bridge::InputAction::BUTTON_Z));
+}
+
 void test_grouped_layout_unknown_fields_and_zigzag_extremes() {
-  const uint32_t pressed = 0x000020UL | 0x020000UL;
+  const uint32_t pressed = 0x000020UL | 0x008000UL;
   auto packet_bytes = grouped_packet(pressed, {{0, INT32_MIN}, {1, INT32_MAX}, {4, 77}});
 
   // Unknown fixed32 and a bounded unknown protobuf group must be skipped.
@@ -286,15 +323,15 @@ void test_every_documented_button_bit_independently() {
       {0x000010UL, bridge::InputAction::BUTTON_A},
       {0x000020UL, bridge::InputAction::BUTTON_B},
       {0x000040UL, bridge::InputAction::BUTTON_Y},
-      {0x000100UL, bridge::InputAction::BUTTON_Z},
-      {0x000200UL, bridge::InputAction::LEFT_SIDE_UPPER},
-      {0x000400UL, bridge::InputAction::LEFT_SIDE_MIDDLE},
-      {0x000800UL, bridge::InputAction::LEFT_SIDE_LOWER},
-      {0x001000UL, bridge::InputAction::LEFT_POWER},
-      {0x002000UL, bridge::InputAction::RIGHT_SIDE_UPPER},
-      {0x004000UL, bridge::InputAction::RIGHT_SIDE_MIDDLE},
-      {0x010000UL, bridge::InputAction::RIGHT_SIDE_LOWER},
-      {0x020000UL, bridge::InputAction::RIGHT_POWER},
+      {0x000080UL, bridge::InputAction::BUTTON_Z},
+      {0x000100UL, bridge::InputAction::LEFT_SIDE_UPPER},
+      {0x000200UL, bridge::InputAction::LEFT_SIDE_MIDDLE},
+      {0x000400UL, bridge::InputAction::LEFT_SIDE_LOWER},
+      {0x000800UL, bridge::InputAction::LEFT_POWER},
+      {0x001000UL, bridge::InputAction::RIGHT_SIDE_UPPER},
+      {0x002000UL, bridge::InputAction::RIGHT_SIDE_MIDDLE},
+      {0x004000UL, bridge::InputAction::RIGHT_SIDE_LOWER},
+      {0x008000UL, bridge::InputAction::RIGHT_POWER},
   };
 
   uint32_t accumulated_known_mask = 0;
@@ -334,7 +371,7 @@ void test_every_documented_button_bit_independently() {
 
 void test_mixed_chord_partial_releases() {
   bridge::InputState state;
-  const uint32_t first_ride_chord = 0x000002UL | 0x000020UL | 0x000200UL | 0x020000UL;
+  const uint32_t first_ride_chord = 0x000002UL | 0x000020UL | 0x000100UL | 0x008000UL;
   const bridge::ActionMask first_action_chord =
       bridge::action_mask(bridge::InputAction::DPAD_UP) |
       bridge::action_mask(bridge::InputAction::BUTTON_B) |
@@ -347,7 +384,7 @@ void test_mixed_chord_partial_releases() {
   EXPECT_EQ(first_action_chord, state.active_actions());
 
   // Release two non-adjacent members while the direction and left shifter stay held.
-  const uint32_t held_ride_chord = 0x000002UL | 0x000200UL;
+  const uint32_t held_ride_chord = 0x000002UL | 0x000100UL;
   const bridge::ActionMask held_action_chord =
       bridge::action_mask(bridge::InputAction::DPAD_UP) |
       bridge::action_mask(bridge::InputAction::LEFT_SIDE_UPPER);
@@ -360,7 +397,7 @@ void test_mixed_chord_partial_releases() {
 
   // Add two different controls without retriggering either held member.
   const uint32_t second_ride_chord =
-      held_ride_chord | 0x000040UL | 0x010000UL;
+      held_ride_chord | 0x000040UL | 0x004000UL;
   const bridge::ActionMask added_actions =
       bridge::action_mask(bridge::InputAction::BUTTON_Y) |
       bridge::action_mask(bridge::InputAction::RIGHT_SIDE_LOWER);
@@ -410,7 +447,7 @@ void expect_all_frame_prefixes_are_bounded(
 }
 
 void test_every_direct_and_grouped_frame_prefix() {
-  const uint32_t pressed = 0x000001UL | 0x000020UL | 0x004000UL;
+  const uint32_t pressed = 0x000001UL | 0x000020UL | 0x002000UL;
   const size_t complete_button_prefix_length = packet_prefix(pressed).size();
 
   const auto direct = direct_packet(pressed, {{0, -73}});
@@ -628,6 +665,7 @@ void run_test(const char *name, TestFunction function) {
 
 int main() {
   run_test("direct layout and inverse mask", test_direct_layout_and_inverse_mask);
+  run_test("live captured button varints", test_live_captured_button_varints);
   run_test("grouped layout, unknown fields, and ZigZag", test_grouped_layout_unknown_fields_and_zigzag_extremes);
   run_test("malformed input is transactional", test_decoder_rejects_bad_input_transactionally);
   run_test("button edges, chords, and release-all", test_button_edges_chords_and_release_all);

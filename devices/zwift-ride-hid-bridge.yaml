@@ -88,8 +88,9 @@ esp32_ble:
 
 esp32_ble_tracker:
   scan_parameters:
-    # Active receive duty is 30/320 = 9.375%. ESPHome runs back-to-back
-    # five-minute sessions so a sleeping controller can always reconnect.
+    # Active receive duty is 30/320 = 9.375% while Ride is disconnected.
+    # The component pauses this global scanner as soon as the Ride client
+    # leaves IDLE, and restores continuous scanning after full disconnect.
     duration: 5min
     interval: 320ms
     window: 30ms

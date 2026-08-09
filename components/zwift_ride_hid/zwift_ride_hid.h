@@ -29,6 +29,7 @@ namespace esphome::zwift_ride_hid {
 class ZwiftRideHid : public Component,
                      public ble_client::BLEClientNode,
                      public esp32_ble_tracker::ESPBTDeviceListener,
+                     public esp32_ble_tracker::BLEScannerStateListener,
                      public RideClientListener
 #ifdef USE_OTA_STATE_LISTENER
     ,
@@ -44,6 +45,7 @@ class ZwiftRideHid : public Component,
   void on_safe_shutdown() override;
 
   bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override;
+  void on_scanner_state(esp32_ble_tracker::ScannerState state) override;
 
   void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                            esp_ble_gattc_cb_param_t *param) override;
@@ -63,6 +65,9 @@ class ZwiftRideHid : public Component,
   void on_ride_sync_response(const uint8_t *data, uint16_t length) override;
 
   void set_ble_parent(esp32_ble::ESP32BLE *parent) { this->ble_parent_ = parent; }
+  void set_ble_tracker(esp32_ble_tracker::ESP32BLETracker *tracker) {
+    this->ble_tracker_ = tracker;
+  }
   void set_hid_name(const std::string &hid_name) { this->hid_name_ = hid_name; }
   void set_profile(const std::string &profile) { this->profile_name_ = profile; }
   void set_press_threshold(uint8_t threshold) { this->press_threshold_ = threshold; }
@@ -110,8 +115,11 @@ class ZwiftRideHid : public Component,
   void log_capture_(const uint8_t *data, size_t length, const RideInputPacket &packet) const;
   bool submit_pending_report_();
   void quiesce_(const char *reason, bool disconnect_ride);
+  void update_scanner_policy_();
+  bool scanner_wanted_();
 
   esp32_ble::ESP32BLE *ble_parent_{nullptr};
+  esp32_ble_tracker::ESP32BLETracker *ble_tracker_{nullptr};
   RideClient ride_client_{};
   HidKeyboard hid_keyboard_{};
   InputState input_state_{};

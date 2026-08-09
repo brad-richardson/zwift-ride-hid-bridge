@@ -47,7 +47,7 @@ See [the complete mapping table](docs/delta-mapping.md) for every button—inclu
 
 - Close Zwift, BikeControl, and other apps that may already hold the controllers' host connection.
 - Power both Ride controllers. The bridge connects only to Ride Left; Right normally joins through Left.
-- Controller discovery uses active, continuous scanning: a 30 ms receive window every 320 ms (9.375% nominal receive duty) in back-to-back five-minute scan sessions. Scanning briefly pauses for connection transitions, then resumes even while Ride is connected so loss recovery remains immediate.
+- Controller discovery uses active, continuous scanning while the Ride client is idle: a 30 ms receive window every 320 ms (9.375% nominal receive duty) in back-to-back five-minute scan sessions. The component pauses the global scanner throughout discovery, connection setup, and the active session, then resumes as soon as disconnect cleanup returns the client to idle.
 - Automatic selection locks the first exact Ride Left match for that boot. If more than one Ride setup is in radio range, replace the all-zero `ble_client` address with the intended Left controller's real MAC to pin it explicitly.
 - Pair the advertised `Zwift Ride KB` once from the iPad. Bond data is stored in ESP32 NVS, so normal application OTA updates should not require re-pairing. Erasing flash/NVS will.
 - Short taps of the two orange logo/power controls emit Select and Start. A long hold is still the controller power gesture and may disconnect it.
