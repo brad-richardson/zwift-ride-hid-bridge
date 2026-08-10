@@ -433,7 +433,7 @@ void ZwiftRideHid::update_idle_policy_() {
   // Announce the moment the bridge becomes willing to reconnect. Without this
   // line, "nothing happened" is indistinguishable from a broken re-arm. It
   // keys off the slow latch rather than the silence timer, because the latch
-  // is what actually lets a wake burst through.
+  // is what actually lets a returning fast rate through.
   if (this->ride_idle_suppressed_ && this->idle_policy_.slowed() &&
       !this->sleep_confirmed_logged_) {
     this->sleep_confirmed_logged_ = true;

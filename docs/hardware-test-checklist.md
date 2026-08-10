@@ -71,10 +71,11 @@ Expected diagnostic keys are arrows; `a/b/y/z`; F1–F4 for LS1/LS2/LB/left logo
 ## Delta profile
 
 - [ ] Switch back to `profile: delta_emulator` and verify keys in Notes before opening Delta.
-- [ ] Confirm arrows, `x/z/s/a`, `q/w`, Tab, Return, and Escape match Delta's fallback mapping.
+- [ ] Confirm arrows, `x/z/s/a`, `q/w`, Tab, Return, and `p` match Delta's fallback mapping.
+- [ ] Confirm the action pad is bound by position, not by letter: the top button (Y) drives Delta's top button, and the left button (Z) drives Delta's left one.
 - [ ] Verify left short logo tap = Select and right short logo tap = Start.
 - [ ] Verify LS1/RS1 = L/R and LS2/RS2 remain independently visible as `e/r`.
-- [ ] Verify LB = Space, RB = Escape, and the four lever polarities = `1/2/3/4`.
+- [ ] Verify LB = Space, RB = `p` (Delta's menu opens), and the four lever polarities = `1/2/3/4`.
 - [ ] Test holds and gameplay chords in NES, SNES, GB/GBC, GBA, DS, and Genesis; record saved per-system overrides.
 - [ ] Confirm N64 is documented as unsupported and is not presented as a working universal mapping.
 
@@ -90,14 +91,24 @@ production values and re-install before signing anything off.
 - [x] Confirm no key is left held. *(2026-08-09: two extra HID reports, the release and the host resync.)*
 - [x] Immediately after the disconnect, confirm the bridge does **not** reconnect while the controllers are still advertising, even across several minutes. *(2026-08-09: held off for nine minutes through a button press and a short power-cycle.)*
 - [ ] With `release_hid: true`, confirm the iPad regains its on-screen keyboard during suppression, and that it reconnects automatically once the bridge advertises again after a fresh handshake. Measure that reconnect delay; it is the cost of this option.
-- [x] Capture the advertising cadence with `debug_advertisements: true`. *(2026-08-09: ~344 ms for two minutes, worst gap 2233 ms; then a ~6 s interval with gaps 5.4-7.3 s; silent at 2m54s. `slow_gap: 5s` sits between the regimes.)*
+- [x] Capture the advertising cadence with `debug_advertisements: true`. *(2026-08-09: measured at 50% scan duty as ~196 ms continuous for two minutes, then ~640 ms continuous, then silent at 2m54s. An earlier capture at 9.375% duty missed roughly half of all advertisements and reported the slow phase as ~6 s; every threshold sized against that number was wrong, so re-measure only at high duty.)*
 - [x] Compare an idle advertisement against one taken after a button press. *(2026-08-09: manufacturer payload is a constant `08 FA 9F` — device ID plus two address bytes — with fixed flags `0x06` and length 26, so content carries no activity signal. Rate is the only usable discriminator.)*
-- [x] Determine whether the controllers stop advertising on their own. *(2026-08-09: yes, 2m54s after release.)*
-- [ ] Confirm the step down to slow advertising latches `Ride Advertising` false and logs `left fast advertising; armed to reconnect`, roughly two minutes after the disconnect.
-- [ ] Confirm the bridge does **not** reconnect during the slow phase, when the controllers are awake but advertising every ~6 s.
-- [ ] Press a control after the latch and confirm the wake burst reconnects within a couple of seconds.
+- [x] Determine whether the controllers stop advertising on their own. *(2026-08-09: yes, 2m54s after release. It is a power-off, not a sleep: a control pressed during the silent phase produced no advertisement, and the controllers had to be switched on by hand.)*
+- [x] Confirm `Ride Advertising Rate` reads ~196 ms within a few seconds of the disconnect, and that the bridge does **not** reconnect while it stays there. *(2026-08-09: first reading 6 s after the disconnect; 164-301 ms across 1m50s, no reconnect.)*
+- [x] Confirm the step down to slow advertising takes `Ride Advertising Rate` to ~640 ms and logs `left fast advertising; armed to reconnect`, roughly two minutes after the disconnect. *(2026-08-09: stepped at 1m50s, then 401-681 ms.)*
+- [x] Confirm the bridge does **not** reconnect during the slow phase, when the controllers are awake but advertising every ~640 ms. *(2026-08-09: 55s of slow phase, `Ride Reconnect Count` stayed 0.)*
+- [ ] Press a control after the latch and confirm the rate returning to ~196 ms reconnects within a couple of seconds. *(Still untested: the controllers powered off before this could be tried, so the wake was exercised as a power-on instead. Needs a press inside the ~3 min window.)*
+- [x] Confirm a manual power-on after the controllers have switched themselves off reconnects promptly. *(2026-08-09: advertising seen at 20:17:11, `ready` at 20:17:16 — 5 s including the HID host re-acquiring.)*
+
+The margins are narrower than the 3.3x rate change suggests. The slowest fast-phase
+reading was 301 ms against `wake_rate: 350ms`, and the fastest slow-phase reading
+was 401 ms against the same threshold — about 50 ms of headroom either side, which
+is scan-duty jitter surviving the 8-sample mean. Raising `rate_samples` to 12 (the
+compiled maximum) would tighten the estimate at the cost of a slower wake: 12
+samples at ~196 ms is ~2.4 s of advertising, so roughly 5 s at 50% duty. Revisit if
+a false reconnect or a refused wake is ever observed.
 - [x] Power-cycle Ride Left for longer than `sleep_confirmation` and confirm the bridge reconnects on its first advertisement. *(2026-08-09: `ride_idle_sleeping` → `connecting` → `ready` in 2 s.)*
-- [ ] Confirm a short power-cycle reconnects once the latch is set, since the wake burst does not depend on the length of the off period.
+- [ ] Confirm a short power-cycle reconnects once the latch is set, since a fresh controller advertises at the fast rate regardless of how long it was off.
 - [ ] Confirm the `Reconnect Ride Controllers` button restores the session immediately even while the controllers are still advertising.
 - [ ] Hold one control continuously across the timeout and confirm the link is **not** dropped: a held input is use, not idle.
 - [ ] Confirm lever noise below `press_threshold` does not keep the session alive.

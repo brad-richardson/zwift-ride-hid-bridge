@@ -138,27 +138,28 @@ zwift_ride_hid:
   idle_timeout:
     disconnect_after: 15min
     # Only feeds the Ride Advertising diagnostic now. Reconnection is decided
-    # by the wake burst below, not by a silence threshold.
+    # by the measured advertising rate below, not by a silence threshold.
     sleep_confirmation: 30s
-    # Backstop only: the wake burst is the normal route back.
+    # Backstop only: a rate drop back to the fast phase is the normal route.
     max_suppression: 60min
     # A connected keyboard makes iPadOS hide its on-screen keyboard, so the
     # bonded host is released for the duration of the idle period.
     release_hid: true
-    # Measured on hardware after a release: ~344 ms advertising for about two
-    # minutes (worst gap 2233 ms), then a ~6 s interval (gaps 5.4-7.3 s), then
-    # silence at 2m54s. slow_gap sits between the two regimes so it latches
-    # when the controller leaves fast advertising and cannot be reached by
-    # missed packets before that.
-    # Ride Left advertises continuously at ~196 ms for about two minutes after
-    # release, drops to a continuous ~640 ms, then stops near three minutes.
-    # Reconnection keys off that 3.3x rate change: the rate rising past
-    # slow_rate latches, and falling back below wake_rate is the wake.
+    # Measured on hardware after a release: Ride Left advertises continuously
+    # at ~196 ms for about two minutes, drops to a continuous ~640 ms, then
+    # stops near 2m54s. Reconnection keys off that 3.3x rate change rather than
+    # any gap between sightings: the measured rate rising past slow_rate latches
+    # the slow phase, and falling back below wake_rate is the wake.
+    #
+    # Both thresholds sit inside the gap between the two regimes, so neither
+    # phase can be mistaken for the other by a few missed packets. Deciding on
+    # rate instead of silence is deliberate: gap-based models failed twice here,
+    # once because the wind-down gaps grow smoothly through any fixed threshold,
+    # and once because the ~640 ms slow phase satisfied a "burst of sightings"
+    # test in under two seconds.
     slow_rate: 500ms
     wake_rate: 350ms
     rate_samples: 8
-    # A wake or reboot returns to ~344 ms advertising, which the slow phase
-    # cannot imitate: three spaced sightings need at least 12 s there.
   # GPIO21 is the XIAO ESP32-S3's active-low orange user LED. The component
   # owns it so its pattern can describe Ride, HID, fault, and OTA state.
   status_led:

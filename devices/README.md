@@ -102,9 +102,9 @@ zwift_ride_hid:
     sleep_confirmation: 30s
     max_suppression: 60min
     release_hid: true
-    slow_gap: 5s
-    wake_burst_count: 3
-    wake_burst_window: 3s
+    slow_rate: 500ms
+    wake_rate: 350ms
+    rate_samples: 8
   status_led:
     number: GPIO21
     inverted: true
@@ -121,6 +121,8 @@ zwift_ride_hid:
       name: Ride Advertising
     advertisement_age:
       name: Ride Advertisement Age
+    advertising_rate:
+      name: Ride Advertising Rate
     reconnect_count:
       name: Ride Reconnect Count
     invalid_frame_count:
@@ -164,7 +166,20 @@ Ride Left does not stop advertising when released, and this took three attempts 
 |---|---|---|
 | fast | release to ~2 min | ~196 ms, continuous |
 | slow | ~2 min to ~3 min | ~640 ms, continuous |
-| asleep | after ~3 min | silent |
+| powered off | after ~3 min | silent |
+
+The third phase is a genuine power-off, not a sleep: once it is reached, pressing
+a control does nothing and the controllers have to be switched back on by hand.
+Confirmed on hardware 2026-08-09 — a button press during the silent phase
+produced no advertisement at all, while a manual power-on was seen and connected
+within 5 s. A button press does bring them back during the fast and slow phases,
+so the "press something and it returns" case only exists in the first ~3 minutes
+after the release.
+
+This is the intended cost of releasing the link rather than a defect. Holding the
+GATT connection is what keeps the controllers awake and drains them, which is the
+whole reason `disconnect_after` exists; they power down afterwards exactly as
+they would if the bridge had never connected.
 
 Two rules were tried and disproved on hardware first:
 
