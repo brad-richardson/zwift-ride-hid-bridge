@@ -118,11 +118,11 @@ zwift_ride_hid:
     state:
       name: Bridge State
     ride_advertising:
-      name: Ride Advertising
+      name: Ride Controllers Powered
     advertisement_age:
-      name: Ride Advertisement Age
+      name: Ride Advertisement Age (When Idle)
     advertising_rate:
-      name: Ride Advertising Rate
+      name: Ride Advertising Rate (When Idle)
     reconnect_count:
       name: Ride Reconnect Count
     invalid_frame_count:
@@ -154,7 +154,7 @@ The press threshold must be greater than the release threshold. Raw lever entiti
 Holding the Ride GATT link keeps the controllers awake, so an unattended bridge would flatten their batteries. `idle_timeout` releases the link instead:
 
 - `disconnect_after` (default `15min`) is the quiet period. Any press, release, or lever threshold crossing restarts it, and a control that is simply held counts as continuous use. `0s` disables the feature and restores the original always-connected behavior.
-- `sleep_confirmation` (default `30s`) sets only when `Ride Advertising` reads false. It no longer decides reconnection; see below.
+- `sleep_confirmation` (default `30s`) sets only when `Ride Controllers Powered` reads false. It no longer decides reconnection; see below.
 - `max_suppression` (default `60min`) is the safety net. If the controllers never stop advertising, the bridge reconnects anyway rather than staying offline until a reboot. `0s` removes the cap and should only be used once the controllers' sleep behavior is well understood.
 - `release_hid` (default `true`) also disconnects the bonded HID host for the duration of the idle period. A connected keyboard makes iPadOS hide its on-screen keyboard, so leaving the link up costs the iPad its software keyboard for hours. Set it to `false` to keep the host attached for the fastest possible resume.
 
@@ -197,13 +197,21 @@ Sightings closer together than about 100 ms are collapsed first, because one adv
 
 This is why the reference tracker runs at 50% receive duty (`80ms`/`160ms`) rather than the original 9.375%. The rate has to be resolved for any of this to work, and the scanner only runs while the Ride link is down.
 
-`Ride Advertising` and `Ride Advertisement Age` show what the bridge currently sees; `sleep_confirmation` sets only when the former reads false.
+`Ride Controllers Powered` and `Ride Advertisement Age (When Idle)` show what the bridge currently sees; `sleep_confirmation` sets only when the former reads false.
 
 Re-measure with `debug_advertisements: true` and `logger.level: DEBUG` if controller firmware changes. Turn it off afterwards — it is verbose and puts the controller's address in the log stream.
 
 While suppressed, `Bridge State` reads `ride_idle_sleeping` and `Ride Idle Disconnect Count` separates deliberate releases from `Ride Reconnect Count`. Every key is released and `Zwift Ride KB` stops advertising; whether the bonded host is also disconnected depends on `release_hid`.
 
-Two diagnostics explain the wait. `Ride Advertising` is false once the controllers have been quiet for `sleep_confirmation`, which is precisely the promise that the next advertisement will reconnect — if it reads true, a button press will *not* bring the session back, by design. `Ride Advertisement Age` gives the seconds since the last sighting and refreshes every five seconds while suppressed. The bridge also logs `Ride Left stopped advertising ...; armed to reconnect` at INFO when it crosses the threshold.
+Three diagnostics explain the wait, and they answer different questions:
+
+- `Ride Advertising Rate (When Idle)` is the one the decision is actually made on. Roughly 196 ms means the controllers are awake and the bridge is deliberately holding off; roughly 640 ms means they are winding down and the slow phase has latched. If a reconnect misbehaves, this says whether the thresholds are wrong.
+- `Ride Controllers Powered` goes false once nothing has been heard for `sleep_confirmation`, which in practice means the controllers have switched themselves off. Pressing a control will not bring them back from there — they have to be powered on by hand.
+- `Ride Advertisement Age (When Idle)` gives the seconds since the last sighting and refreshes every five seconds while suppressed.
+
+Both `(When Idle)` sensors only update while the Ride link is down, because the scanner is stopped during an active session. They hold their last value rather than reverting to unknown after a reconnect, so read `Ride Controller Connected` for the live state.
+
+The bridge also logs `Ride Left stopped advertising ...; armed to reconnect` at INFO when it crosses the threshold.
 
 ### Getting the session back immediately
 

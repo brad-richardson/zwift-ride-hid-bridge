@@ -137,8 +137,9 @@ zwift_ride_hid:
   # trade is worth it.
   idle_timeout:
     disconnect_after: 15min
-    # Only feeds the Ride Advertising diagnostic now. Reconnection is decided
-    # by the measured advertising rate below, not by a silence threshold.
+    # Only feeds the Ride Controllers Powered diagnostic now. Reconnection is
+    # decided by the measured advertising rate below, not by a silence
+    # threshold.
     sleep_confirmation: 30s
     # Backstop only: a rate drop back to the fast phase is the normal route.
     max_suppression: 60min
@@ -175,17 +176,18 @@ zwift_ride_hid:
     state:
       name: Bridge State
     # True while Ride Left is present: either connected, or seen advertising
-    # recently. False means it has gone quiet, which is the reading that
-    # explains why a button press did or did not bring the session back.
+    # within sleep_confirmation. False means the controllers have switched
+    # themselves off, which is the reading that explains why pressing a
+    # control did nothing.
     ride_advertising:
-      name: Ride Advertising
+      name: Ride Controllers Powered
     advertisement_age:
-      name: Ride Advertisement Age
+      name: Ride Advertisement Age (When Idle)
     # What the reconnect logic actually measures: ~196 ms while the controller
     # is awake, ~640 ms while winding down. If a reconnect misbehaves, this is
     # the reading that says whether the thresholds are wrong.
     advertising_rate:
-      name: Ride Advertising Rate
+      name: Ride Advertising Rate (When Idle)
     reconnect_count:
       name: Ride Reconnect Count
     invalid_frame_count:

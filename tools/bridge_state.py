@@ -39,11 +39,11 @@ DIAGNOSTIC_ENTITIES = {
     "Bridge State",
     # False means the controllers have gone quiet long enough that the next
     # advertisement will reconnect, which is what explains a refused wake.
-    "Ride Advertising",
-    "Ride Advertisement Age",
+    "Ride Controllers Powered",
+    "Ride Advertisement Age (When Idle)",
     # The measured advertising rate is what the reconnect decision keys off, so
     # it is the entity that explains both a wake and a refused one.
-    "Ride Advertising Rate",
+    "Ride Advertising Rate (When Idle)",
     "Ride Reconnect Count",
     "Ride Idle Disconnect Count",
     "Ride Setup Timeout Count",
