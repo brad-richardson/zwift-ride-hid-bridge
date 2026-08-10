@@ -41,7 +41,7 @@ The checked-in device YAML deliberately uses a local external-component path so 
 
 ## Default Delta controls
 
-The important defaults are arrows for the D-pad; `x`/`z` for A/B; `s`/`a` for X/Y; `q`/`w` for L/R; Tab/Return for Select/Start; and Escape for Delta's menu. The remaining shifters, drop button, and four lever polarities receive distinct spare keys rather than disappearing.
+The important defaults are arrows for the D-pad; `x`/`z` for A/B; `s`/`a` for X/Y; `q`/`w` for L/R; Tab/Return for Select/Start; and `p` for Delta's menu. The action pad is bound by position rather than by matching letters, because Zwift's diamond (Y top, A right, B bottom, Z left) is rotated relative to Delta's (X top, A right, B bottom, Y left). The remaining shifters, drop button, and four lever polarities receive distinct spare keys rather than disappearing.
 
 See [the complete mapping table](docs/delta-mapping.md) for every button—including Z, both logo/power buttons, LS1, LS2, RS1, RS2, LB, RB, and all four thresholded lever actions—and for the diagnostic profile.
 

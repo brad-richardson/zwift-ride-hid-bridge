@@ -15,17 +15,23 @@ constexpr Keymap kDeltaEmulatorMap{
         hid_usage::ARROW_UP,     // DPAD_UP
         hid_usage::ARROW_RIGHT,  // DPAD_RIGHT
         hid_usage::ARROW_DOWN,   // DPAD_DOWN
-        hid_usage::X,            // BUTTON_A
-        hid_usage::Z,            // BUTTON_B
-        hid_usage::A,            // BUTTON_Y
-        hid_usage::S,            // BUTTON_Z (Delta X)
+        // The action pad is mapped by position, not by letter. Zwift places
+        // Y top, A right, B bottom, Z left; Delta's diamond is X top, A right,
+        // B bottom, Y left. Binding Zwift Y to Delta's Y would put the top
+        // button on the left one, so each Zwift button takes the key Delta
+        // assigns to the button in the same place: s top, x right, z bottom,
+        // a left.
+        hid_usage::X,            // BUTTON_A    right  -> Delta A
+        hid_usage::Z,            // BUTTON_B    bottom -> Delta B
+        hid_usage::S,            // BUTTON_Y    top    -> Delta X
+        hid_usage::A,            // BUTTON_Z    left   -> Delta Y
         hid_usage::Q,            // LEFT_SIDE_UPPER
         hid_usage::E,            // LEFT_SIDE_MIDDLE
         hid_usage::SPACE,        // LEFT_SIDE_LOWER
         hid_usage::TAB,          // LEFT_POWER / Select
         hid_usage::W,            // RIGHT_SIDE_UPPER
         hid_usage::R,            // RIGHT_SIDE_MIDDLE
-        hid_usage::ESCAPE,       // RIGHT_SIDE_LOWER / Menu
+        hid_usage::P,            // RIGHT_SIDE_LOWER / Delta menu
         hid_usage::RETURN,       // RIGHT_POWER / Start
         hid_usage::DIGIT_1,      // LEFT_LEVER_NEGATIVE
         hid_usage::DIGIT_2,      // LEFT_LEVER_POSITIVE

@@ -13,6 +13,7 @@ constexpr uint8_t ERROR_ROLLOVER = 0x01;
 constexpr uint8_t A = 0x04;
 constexpr uint8_t B = 0x05;
 constexpr uint8_t E = 0x08;
+constexpr uint8_t P = 0x13;
 constexpr uint8_t Q = 0x14;
 constexpr uint8_t R = 0x15;
 constexpr uint8_t S = 0x16;

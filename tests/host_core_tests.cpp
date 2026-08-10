@@ -515,19 +515,26 @@ void test_analog_hysteresis_and_sign_change() {
 void test_default_and_diagnostic_keymaps() {
   const auto &map = bridge::keymap_for_profile(bridge::KeymapProfile::DELTA_EMULATOR);
   EXPECT_EQ(std::string("delta_emulator"), std::string(map.name));
+  // The action pad is bound by position, not by matching letters. Zwift's
+  // diamond is Y top, A right, B bottom, Z left; Delta's is X top, A right,
+  // B bottom, Y left. Binding by letter put the top button on Delta's left
+  // one and the left button on Delta's top one, so the two that share a letter
+  // with a differently-placed Delta button are the ones worth pinning here.
+  EXPECT_EQ(bridge::hid_usage::S,
+            map.usages[static_cast<uint8_t>(bridge::InputAction::BUTTON_Y)]);
   EXPECT_EQ(bridge::hid_usage::X,
             map.usages[static_cast<uint8_t>(bridge::InputAction::BUTTON_A)]);
   EXPECT_EQ(bridge::hid_usage::Z,
             map.usages[static_cast<uint8_t>(bridge::InputAction::BUTTON_B)]);
-  EXPECT_EQ(bridge::hid_usage::S,
-            map.usages[static_cast<uint8_t>(bridge::InputAction::BUTTON_Z)]);
   EXPECT_EQ(bridge::hid_usage::A,
-            map.usages[static_cast<uint8_t>(bridge::InputAction::BUTTON_Y)]);
+            map.usages[static_cast<uint8_t>(bridge::InputAction::BUTTON_Z)]);
   EXPECT_EQ(bridge::hid_usage::TAB,
             map.usages[static_cast<uint8_t>(bridge::InputAction::LEFT_POWER)]);
   EXPECT_EQ(bridge::hid_usage::RETURN,
             map.usages[static_cast<uint8_t>(bridge::InputAction::RIGHT_POWER)]);
-  EXPECT_EQ(bridge::hid_usage::ESCAPE,
+  // Delta's menu is P. Escape reaches nothing in Delta, so binding it here
+  // silently cost the drop button its only purpose.
+  EXPECT_EQ(bridge::hid_usage::P,
             map.usages[static_cast<uint8_t>(bridge::InputAction::RIGHT_SIDE_LOWER)]);
 
   bridge::KeymapProfile profile{};
