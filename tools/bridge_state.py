@@ -41,6 +41,9 @@ DIAGNOSTIC_ENTITIES = {
     # advertisement will reconnect, which is what explains a refused wake.
     "Ride Advertising",
     "Ride Advertisement Age",
+    # The measured advertising rate is what the reconnect decision keys off, so
+    # it is the entity that explains both a wake and a refused one.
+    "Ride Advertising Rate",
     "Ride Reconnect Count",
     "Ride Idle Disconnect Count",
     "Ride Setup Timeout Count",
@@ -51,6 +54,44 @@ DIAGNOSTIC_ENTITIES = {
     "Right Lever Raw",
     "Uptime",
 }
+
+
+# Read-only entity classes. Buttons and switches are controls rather than
+# diagnostics, so their absence from the list above is deliberate.
+READ_ONLY_ENTITY_TYPES = ("SensorInfo", "BinarySensorInfo", "TextSensorInfo")
+
+# ESPHome's own platform diagnostics. They say nothing about the bridge, and
+# listing them here keeps the drift warning below specific to this component.
+PLATFORM_ENTITIES = {
+    "BSSID",
+    "ESPHome Version",
+    "IP",
+    "SSID",
+    "Status",
+    "WiFi Signal",
+}
+
+
+def warn_about_unlisted(entities) -> None:
+    """Report read-only entities the device publishes that the list above omits.
+
+    The list is maintained by hand and has twice gone stale after the firmware
+    gained an entity, each time hiding a reading rather than reporting an error.
+    Naming the omission on stderr makes the next drift visible immediately.
+    """
+    unlisted = sorted(
+        entity.name
+        for entity in entities
+        if type(entity).__name__ in READ_ONLY_ENTITY_TYPES
+        and entity.name not in DIAGNOSTIC_ENTITIES
+        and entity.name not in PLATFORM_ENTITIES
+    )
+    if unlisted:
+        print(
+            "warning: device publishes read-only entities missing from "
+            f"DIAGNOSTIC_ENTITIES: {', '.join(unlisted)}",
+            file=sys.stderr,
+        )
 
 
 def environment(name: str, default: str | None = None) -> str:
@@ -76,6 +117,7 @@ async def snapshot() -> None:
     try:
         device = await client.device_info()
         entities, _ = await client.list_entities_services()
+        warn_about_unlisted(entities)
         entity_by_key = {entity.key: entity for entity in entities}
         states: dict[int, object] = {}
         first_state = asyncio.Event()
@@ -120,6 +162,7 @@ async def watch(seconds: float) -> None:
     await client.connect(login=True)
     try:
         entities, _ = await client.list_entities_services()
+        warn_about_unlisted(entities)
         entity_by_key = {entity.key: entity for entity in entities}
         previous: dict[str, str] = {}
 
